@@ -287,6 +287,17 @@ access token 并回传新的 refresh_token）在过期前**主动续期**。
 `isQueued=true` 一律判为 `upstream_queued`（不换号、进入同账号等待）。
 
 **回归测试**：`TestParseUpstreamNestedErrorCallCountLimit` / `TestFriendlyUpstreamError_CallCountLimitQueued`。
+### 🎚️ 面板：Context 默认 1M + 模型价格倍率（2026-10-28）
+
+**2026-10-28 CST** · 本地特性（`local/org-resource-package` 分支）
+
+- **Context 档位默认改为 `1M`**：未配置 `context_tier_default` 时后端按 1M 解析
+  （`internal/bridge/bridge.go` 的 `defaultContextTier`）；模型不支持该档位时
+  （如 `auto` 仅 200K）自动回落到上游默认，不会报错。控制台下拉移除
+  「上游默认」占位项，直接展示并默认选中 1M。
+- **模型表新增「价格倍率」列**：展示上游 `price_factor`（credits 计费系数，
+  越小越便宜），便于在模型/缓存命中之间做成本取舍。
+
 ### 📋 新增：模型调用日志（2026-10-28）
 
 **2026-10-28 CST** · 本地特性（`local/org-resource-package` 分支）

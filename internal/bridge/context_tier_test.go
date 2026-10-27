@@ -2,6 +2,9 @@ package bridge
 
 import (
 	"testing"
+	"time"
+
+	"qoder2api/account"
 )
 
 func TestParseQoderModels_ContextTiers(t *testing.T) {
@@ -116,13 +119,48 @@ func TestContextTierTokensLookup(t *testing.T) {
 		{"qmodel_38max", "400K", 400000},
 		{"qmodel_38max", "1M", 1000000},
 		{"qmodel_38max", "200K", 200000},
-		{"qmodel_38max", "8M", 0},   // 不存在的档位
-		{"other_model", "400K", 0},  // 不存在的模型
+		{"qmodel_38max", "8M", 0},        // 不存在的档位
+		{"other_model", "400K", 0},       // 不存在的模型
 		{"QMODEL_38MAX", "400k", 400000}, // 大小写不敏感
 	}
 	for _, c := range cases {
 		if got := b.contextTierTokens(c.model, c.tier); got != c.want {
 			t.Errorf("contextTierTokens(%q, %q) = %d, want %d", c.model, c.tier, got, c.want)
 		}
+	}
+}
+
+// TestResolveContextTokensDefault1M 验证未配置档位时默认取 1M；
+// 模型不支持 1M（如 auto 仅 200K）时回落到上游默认（返回 0）；
+// 显式配置仍优先生效。
+func TestResolveContextTokensDefault1M(t *testing.T) {
+	account.SetDataRoot(t.TempDir())
+	if err := account.SaveSettings(&account.Settings{}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	catalog := []QoderModel{
+		{Key: "qmodel_38max", ContextTiers: []ContextTier{
+			{Name: "200K", Tokens: 200000, IsDefault: true},
+			{Name: "400K", Tokens: 400000},
+			{Name: "1M", Tokens: 1000000},
+		}},
+		{Key: "auto", ContextTiers: []ContextTier{{Name: "200K", Tokens: 200000, IsDefault: true}}},
+	}
+	b := &Bridge{catalogCache: catalog, catalogCacheAt: time.Now()}
+
+	if got := b.resolveContextTokens("qmodel_38max"); got != 1000000 {
+		t.Errorf("default tier = %d, want 1000000 (1M)", got)
+	}
+	// 不支持 1M 的模型：返回 0，交由上游默认档
+	if got := b.resolveContextTokens("auto"); got != 0 {
+		t.Errorf("auto tier = %d, want 0 (fallback to upstream default)", got)
+	}
+
+	// 显式配置覆盖默认
+	if err := account.SaveSettings(&account.Settings{ContextTierDefault: "400K"}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	if got := b.resolveContextTokens("qmodel_38max"); got != 400000 {
+		t.Errorf("configured tier = %d, want 400000", got)
 	}
 }

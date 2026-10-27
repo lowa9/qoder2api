@@ -113,6 +113,10 @@ type ContextTier struct {
 	IsDefault bool   `json:"is_default"` // 是否上游默认档
 }
 
+// defaultContextTier 未配置 context 档位时使用的默认档。
+// 模型不支持该档位时 resolveContextTokens 会回落到上游默认档。
+const defaultContextTier = "1M"
+
 // tokenPrefix 安全截取 token 前 n 字节用于日志展示（不足 n 返回全串）。
 // 防止用户误粘贴短 token 时 pat[:10] 之类切片越界 panic；日志只输出前缀不输出全文。
 func tokenPrefix(s string, n int) string {
@@ -378,8 +382,10 @@ func (b *Bridge) resolveContextTokens(model string) int {
 	if tierName == "" {
 		tierName = settings.ContextTierDefault
 	}
+	// 未配置时默认使用最大档 1M（本项目默认追求大上下文）；
+	// 模型不支持该档位时（如 auto 仅 200K）自动回落到上游默认。
 	if tierName == "" {
-		return 0
+		tierName = defaultContextTier
 	}
 
 	// 用模型目录把档位名换成 token 数
@@ -417,13 +423,33 @@ func (b *Bridge) modelCatalog() []QoderModel {
 	if b.catalogCache != nil && time.Since(b.catalogCacheAt) < 5*time.Minute {
 		return b.catalogCache
 	}
-	models, err := b.ListAvailableModels()
+	models, err := b.fetchCatalogModels()
 	if err != nil || len(models) == 0 {
 		return b.catalogCache // 失败时返回旧缓存（可能为 nil）
 	}
 	b.catalogCache = models
 	b.catalogCacheAt = time.Now()
 	return models
+}
+
+// fetchCatalogModels 拉取模型目录但**不推进账号池轮询游标**。
+// 目录是只读元数据（context 档位解析用），若复用 ListAvailableModels 的
+// pickSlot，会消耗一次轮换顺序，把本该轮到 A 的请求派给 B。
+// 这里按池内顺序挑第一个可用账号，失败再试下一个，不修改 cursor。
+func (b *Bridge) fetchCatalogModels() ([]QoderModel, error) {
+	for _, slot := range b.candidateSlots() {
+		if !slot.available(time.Now()) {
+			continue
+		}
+		resp, err := slot.client.callGet(qoderModelListURL(slot.Region))
+		if err != nil {
+			continue
+		}
+		if models := parseQoderModels(resp); len(models) > 0 {
+			return models, nil
+		}
+	}
+	return nil, fmt.Errorf("no available slot for model catalog")
 }
 
 func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages []interface{}, model string, tools interface{}, opts CallOpts, onDelta func(Delta)) (err error) {

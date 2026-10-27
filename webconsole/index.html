@@ -292,7 +292,7 @@
         <div class="row" style="margin-bottom:10px; flex-wrap:wrap; gap:6px">
           <label style="margin:0">Context 档位</label>
           <select id="ctxTierGlobal" style="width:130px">
-            <option value="">上游默认</option>
+            <option value="1M">1M</option>
           </select>
           <span class="muted" id="ctxTierHint">选择后对该实例所有模型生效</span>
           <button class="secondary" id="ctxTierSave">保存</button>
@@ -542,12 +542,14 @@
         const tiers = (m.context_tiers && m.context_tiers.length)
           ? m.context_tiers.map(t => `${t.name}${t.is_default ? '*' : ''}`).join(' / ')
           : '-';
+        const price = (m.price_factor != null) ? `×${m.price_factor}` : '-';
         return `<tr>
           <td>${name}</td>
           <td>${key}</td>
           <td>${ctx}</td>
           <td class="muted" style="font-size:11px">${tiers}</td>
           <td>${maxOut}</td>
+          <td style="text-align:right">${price}</td>
           <td>${m.is_reasoning ? '✅' : ''}</td>
           <td>${m.enable === false ? '❌' : '✅'}</td>
         </tr>`;
@@ -560,13 +562,14 @@
             <th>上下文</th>
             <th>可用档位</th>
             <th>最大输出</th>
+            <th style="text-align:right">价格倍率</th>
             <th>推理</th>
             <th>启用</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
       </table>
-      <div class="muted" style="font-size:11px;margin-top:6px">* = 上游默认档位</div>`;
+      <div class="muted" style="font-size:11px;margin-top:6px">* = 上游默认档位 · 价格倍率是上游 price_factor（credits 计费系数，越小越便宜）</div>`;
     }
 
     function fmtDur(ms) {
@@ -1020,9 +1023,9 @@
       });
       const opts = [...seen.entries()].sort((a, b) => a[1] - b[1]);
       ctxTierCache.options = opts.map(([name]) => name);
-      const cur = ctxTierCache.default || '';
-      sel.innerHTML = '<option value="">上游默认</option>' +
-        opts.map(([name, tok]) =>
+      // 未配置时默认 1M（后端同样以 1M 为默认；模型不支持时自动回落）
+      const cur = ctxTierCache.default || '1M';
+      sel.innerHTML = opts.map(([name, tok]) =>
           `<option value="${name}" ${name === cur ? 'selected' : ''}>${name} (${tok.toLocaleString()})</option>`
         ).join('');
     }
@@ -1030,13 +1033,13 @@
     async function loadCtxTier(models) {
       try {
         const st = await api('/api/settings');
-        ctxTierCache.default = (st && st.context_tier_default) || '';
+        ctxTierCache.default = (st && st.context_tier_default) || '1M';
         renderCtxTierOptions(models);
         const hint = $('ctxTierHint');
         if (hint) {
           const ov = (st && st.context_tier_overrides) || {};
           const n = Object.keys(ov).length;
-          hint.textContent = n ? `全局默认 + ${n} 个按模型覆盖` : '选择后对该实例所有模型生效';
+          hint.textContent = (n ? `全局默认 + ${n} 个按模型覆盖` : '默认 1M；模型不支持所选档位时自动回落（如 auto 仅 200K）');
         }
       } catch (e) {
         // settings 可能未暴露这些字段（旧版本），忽略
