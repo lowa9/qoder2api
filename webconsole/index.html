@@ -1,220 +1,187 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
       <title>qoder2api Console</title>
   <style>
-    :root {
-      --bg: #f6f5f2;
-      --card: #fff;
-      --text: #1f1f1f;
-      --muted: #6b6b6b;
-      --line: #e8e6e1;
-      --ok: #1a7f37;
-      --bad: #cf222e;
-      --accent: #2563eb;
-      --warn: #9a6700;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: var(--bg);
-      color: var(--text);
-    }
-    header {
-      padding: 20px 24px;
-      border-bottom: 1px solid var(--line);
-      background: var(--card);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-    }
-    h1 { margin: 0; font-size: 20px; }
-    h3 { margin: 0 0 12px; font-size: 16px; }
-    .muted { color: var(--muted); font-size: 13px; }
-    main {
-      max-width: 1100px;
-      margin: 0 auto;
-      padding: 24px;
-      display: grid;
-      gap: 16px;
-    }
-    .card {
-      background: var(--card);
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 16px;
-    }
-    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      border-radius: 999px;
-      padding: 4px 10px;
-      font-size: 12px;
-      border: 1px solid var(--line);
-      background: #fafafa;
-    }
-    .dot {
-      width: 8px; height: 8px; border-radius: 50%;
-      background: var(--bad);
-    }
-    .dot.on { background: var(--ok); }
-    button, input, select {
-      font: inherit;
-      border-radius: 8px;
-      border: 1px solid var(--line);
-      padding: 8px 12px;
-      background: #fff;
-    }
-    button {
-      cursor: pointer;
-      background: var(--accent);
-      color: #fff;
-      border-color: var(--accent);
-    }
-    button.secondary {
-      background: #fff;
-      color: var(--text);
-      border-color: var(--line);
-    }
-    button.danger {
-      background: #fff;
-      color: var(--bad);
-      border-color: #f0c2c6;
-    }
-    button:disabled { opacity: .6; cursor: not-allowed; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td {
-      text-align: left;
-      padding: 10px 8px;
-      border-bottom: 1px solid var(--line);
-      font-size: 14px;
-      vertical-align: top;
-    }
-    th { color: var(--muted); font-weight: 600; }
-    pre {
-      margin: 0;
-      white-space: pre-wrap;
-      word-break: break-word;
-      font-size: 12px;
-      max-height: 280px;
-      overflow: auto;
-      background: #fafafa;
-      border-radius: 8px;
-      padding: 12px;
-      border: 1px solid var(--line);
-    }
-    .grid-2 {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-    }
-    @media (max-width: 860px) {
-      .grid-2 { grid-template-columns: 1fr; }
-    }
-    label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
-    input, select { width: 100%; }
-    .msg { font-size: 13px; color: var(--muted); min-height: 18px; }
-    .msg.err { color: var(--bad); }
-    .msg.ok { color: var(--ok); }
-    .quota {
-      font-size: 12px;
-      line-height: 1.5;
-      color: var(--muted);
-      width: 100%;
-      max-width: 300px;
-    }
-    .quota strong { color: var(--text); font-weight: 600; }
-    .quota-block {
-      display: inline-block;
-      margin-right: 8px;
-      padding: 6px 8px;
-      background: rgba(255,255,255,0.05);
-      border-radius: 4px;
-      vertical-align: top;
-      font-size: 11px;
-    }
-    .addon-block {
-      border-left: 2px solid #4caf50;
-      margin-top: 0;
-    }
-    /* 账号列表按 region 分组的标题行 */
-    .region-row td {
-      background: #f0efec;
-      font-weight: 700;
-      font-size: 12px;
-      letter-spacing: .04em;
-      color: #444;
-      border-top: 2px solid #d6d3cc;
-      border-bottom: 1px solid var(--line);
-      padding: 8px;
-    }
-    .region-row .region-tag {
-      display: inline-block;
-      padding: 1px 8px;
-      border-radius: 4px;
-      background: #444;
-      color: #fff;
-      margin-right: 8px;
-      font-size: 11px;
-    }
-    .region-row .region-tag.gl { background: #1a7f37; }
-    .region-row .region-active {
-      color: var(--muted);
-      font-weight: 400;
-      letter-spacing: 0;
-      margin-left: 8px;
-    }
-    .bar {
-      height: 5px;
-      background: #eee;
-      border-radius: 999px;
-      overflow: hidden;
-      margin-top: 3px;
-      width: 120px;
-    }
-    .bar > i {
-      display: block;
-      height: 100%;
-      background: var(--accent);
-    }
-    .bar.warn > i { background: var(--warn); }
-    .bar.bad > i { background: var(--bad); }
-    .oauth-box {
-      border: 1px dashed var(--line);
-      border-radius: 10px;
-      padding: 12px;
-      background: #fafafa;
-      margin-top: 12px;
-    }
-    a { color: var(--accent); }
+/* ── 设计令牌：明暗两套 ───────────────────────────────────────────── */
+:root, [data-theme="dark"] {
+  --bg: #0c0e14; --surface: #14171f; --surface-2: #1a1e28; --raise: #202531;
+  --line: #262c3a; --line-soft: #1e232e;
+  --ink: #e8ebf2; --ink-2: #a8b0c2; --ink-3: #6b7488;
+  --accent: #5b7cfa; --accent-ink: #fff; --accent-soft: rgba(91,124,250,.13);
+  --ok: #3ddc97; --ok-soft: rgba(61,220,151,.12);
+  --warn: #f5b544; --warn-soft: rgba(245,181,68,.12);
+  --bad: #f0655f; --bad-soft: rgba(240,101,95,.12);
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.5);
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+[data-theme="light"] {
+  --bg: #f4f5f8; --surface: #fff; --surface-2: #f8f9fb; --raise: #fff;
+  --line: #e2e5ec; --line-soft: #eceef3;
+  --ink: #14171f; --ink-2: #545c6e; --ink-3: #8b93a5;
+  --accent: #3d5fe0; --accent-ink: #fff; --accent-soft: rgba(61,95,224,.09);
+  --ok: #0f9d63; --ok-soft: rgba(15,157,99,.1);
+  --warn: #b47611; --warn-soft: rgba(180,118,17,.11);
+  --bad: #cf3b34; --bad-soft: rgba(207,59,52,.09);
+  --shadow: 0 1px 2px rgba(16,20,32,.06), 0 8px 24px -14px rgba(16,20,32,.14);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  background: var(--bg); color: var(--ink); font: 14px/1.55 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+::selection { background: var(--accent-soft); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+a { color: var(--accent); }
+
+/* ── 壳层：左侧导航 + 主区 ───────────────────────────────────────── */
+.shell { display: grid; grid-template-columns: 208px 1fr; min-height: 100vh; }
+.nav {
+  background: var(--surface); border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh;
+}
+.brand { padding: 20px 18px 16px; border-bottom: 1px solid var(--line-soft); }
+.brand .name { font-weight: 650; letter-spacing: -.01em; font-size: 15px; }
+.brand .sub { color: var(--ink-3); font-size: 11.5px; font-family: var(--mono); margin-top: 3px; }
+.nav ul { list-style: none; padding: 10px 8px; flex: 1; }
+.nav a {
+  display: flex; align-items: center; gap: 10px; padding: 8px 11px; margin-bottom: 2px;
+  color: var(--ink-2); text-decoration: none; border-radius: 7px; font-size: 13.5px;
+}
+.nav a:hover { background: var(--surface-2); color: var(--ink); }
+.nav a.on { background: var(--accent-soft); color: var(--accent); font-weight: 550; }
+.nav a svg { width: 15px; height: 15px; flex: none; opacity: .85; }
+.nav .sig { padding: 12px 16px; border-top: 1px solid var(--line-soft); font-size: 11.5px; color: var(--ink-3); }
+.nav .sig .row { display: flex; align-items: center; gap: 7px; }
+.pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); flex: none; }
+.pulse.on { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+
+.main { min-width: 0; display: flex; flex-direction: column; }
+.topbar {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 14px 24px; border-bottom: 1px solid var(--line); background: var(--surface);
+  position: sticky; top: 0; z-index: 5;
+}
+.topbar h1 { font-size: 17px; margin: 0; }
+main { padding: 20px 24px 40px; width: 100%; max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+
+/* ── 卡片与通用控件 ───────────────────────────────────────────────── */
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; box-shadow: var(--shadow); }
+h3 { margin: 0 0 12px; font-size: 14.5px; }
+.muted { color: var(--ink-3); font-size: 12.5px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.pill {
+  display: inline-flex; align-items: center; gap: 6px; border-radius: 999px;
+  padding: 3px 10px; font-size: 12px; border: 1px solid var(--line); background: var(--surface-2);
+}
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); }
+.dot.on { background: var(--ok); }
+button, input, select {
+  font: inherit; border-radius: 8px; border: 1px solid var(--line);
+  padding: 7px 11px; background: var(--surface-2); color: var(--ink);
+}
+button { cursor: pointer; background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.secondary { background: var(--surface-2); color: var(--ink); border-color: var(--line); }
+button.secondary:hover { border-color: var(--ink-3); }
+button.danger { background: var(--surface-2); color: var(--bad); border-color: var(--bad-soft); }
+button:disabled { opacity: .6; cursor: not-allowed; }
+input, select { width: 100%; }
+label { display: block; font-size: 12.5px; color: var(--ink-3); margin-bottom: 6px; }
+.msg { font-size: 12.5px; color: var(--ink-3); min-height: 18px; }
+.msg.err { color: var(--bad); }
+.msg.ok { color: var(--ok); }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--line-soft); font-size: 13px; vertical-align: top; }
+th { color: var(--ink-3); font-weight: 600; font-size: 12px; }
+pre {
+  margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12px;
+  font-family: var(--mono); max-height: 320px; overflow: auto;
+  background: var(--surface-2); color: var(--ink-2); border-radius: 8px;
+  padding: 12px; border: 1px solid var(--line);
+}
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+/* ── 额度与账号 ───────────────────────────────────────────────────── */
+.quota { font-size: 12px; line-height: 1.5; color: var(--ink-3); width: 100%; max-width: 320px; }
+.quota strong { color: var(--ink); font-weight: 600; }
+.quota-block {
+  display: inline-block; margin-right: 8px; padding: 6px 8px;
+  background: var(--raise); border: 1px solid var(--line-soft);
+  border-radius: 6px; vertical-align: top; font-size: 11px;
+}
+.addon-block { border-left: 2px solid var(--ok); margin-top: 0; }
+.region-row td {
+  background: var(--surface-2); font-weight: 700; font-size: 12px; letter-spacing: .04em;
+  color: var(--ink-2); border-top: 2px solid var(--line); border-bottom: 1px solid var(--line); padding: 8px;
+}
+.region-row .region-tag {
+  display: inline-block; padding: 1px 8px; border-radius: 4px;
+  background: var(--ink-3); color: var(--bg); margin-right: 8px; font-size: 11px;
+}
+.region-row .region-tag.gl { background: var(--ok); }
+.region-row .region-active { color: var(--ink-3); font-weight: 400; letter-spacing: 0; margin-left: 8px; }
+.bar { height: 5px; background: var(--line); border-radius: 999px; overflow: hidden; margin-top: 3px; width: 120px; }
+.bar > i { display: block; height: 100%; background: var(--accent); }
+.bar.warn > i { background: var(--warn); }
+.bar.bad > i { background: var(--bad); }
+.oauth-box { border: 1px dashed var(--line); border-radius: 10px; padding: 12px; background: var(--surface-2); margin-top: 12px; }
+
+@media (max-width: 860px) {
+  .shell { grid-template-columns: 1fr; }
+  .nav { position: static; height: auto; flex-direction: row; align-items: center; border-right: 0; border-bottom: 1px solid var(--line); }
+  .nav .brand { padding: 10px 14px; border: 0; }
+  .nav ul { display: flex; padding: 6px 8px; overflow-x: auto; }
+  .nav a { padding: 6px 10px; margin-bottom: 0; white-space: nowrap; }
+  .nav .sig { display: none; }
+  .grid-2 { grid-template-columns: 1fr; }
+  main { padding: 14px 12px 32px; }
+}
   </style>
 </head>
 <body>
-  <header>
-    <div>
-      <h1>qoder2api</h1>
-      <div class="muted">轻量 Bridge + Web · CN 3588/8963 · Global 3589/8964</div>
+<div class="shell">
+  <nav class="nav">
+    <div class="brand">
+      <div class="name">qoder2api</div>
+      <div class="sub">Bridge 控制台</div>
     </div>
-    <div class="row">
-      <span class="pill"><span id="statusDot" class="dot"></span><span id="statusText">checking</span></span>
-      <button class="secondary" id="refreshBtn">刷新</button>
-      <button class="secondary" id="logoutBtn">退出登录</button>
+    <ul>
+      <li><a href="#accounts" data-view="accounts" class="on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="5.5" r="2.6"/><path d="M2.8 13.5c.6-2.6 2.7-4 5.2-4s4.6 1.4 5.2 4"/></svg>账号池</a></li>
+      <li><a href="#usage" data-view="usage"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 13.5h12"/><path d="M4.5 13.5V8.2M8 13.5V3.5M11.5 13.5v-3"/></svg>用量</a></li>
+      <li><a href="#config" data-view="config"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.9M8 12.5v1.9M1.6 8h1.9M12.5 8h1.9M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3"/></svg>配置</a></li>
+      <li><a href="#models" data-view="models"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1.8 14 5v6L8 14.2 2 11V5z"/><path d="M2 5l6 3.2L14 5M8 8.2v6"/></svg>模型档位</a></li>
+      <li><a href="#logs" data-view="logs"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 3.5h11M2.5 8h11M2.5 12.5h7"/></svg>运行日志</a></li>
+    </ul>
+    <div class="sig">
+      <div class="row"><span class="pulse" id="navPulse"></span><span id="navState">连接中</span></div>
+      <div class="row" style="margin-top:5px">CN 3588 · Bridge 8963</div>
     </div>
-  </header>
-
-  <main>
-    <section class="card">
+  </nav>
+  <div class="main">
+    <header class="topbar">
+      <div>
+        <h1 id="viewTitle">账号池</h1>
+        <div class="muted" id="viewSub">账号、额度与签到</div>
+      </div>
+      <div class="row">
+        <span class="pill"><span id="statusDot" class="dot"></span><span id="statusText">checking</span></span>
+        <button class="secondary" id="themeBtn" title="切换主题">☀️</button>
+        <button class="secondary" id="refreshBtn">刷新</button>
+        <button class="secondary" id="logoutBtn">退出登录</button>
+      </div>
+    </header>
+    <main>
+    <section class="card" data-view="accounts">
       <h3>状态</h3>
       <div class="row" id="statusMeta"></div>
     </section>
 
-    <section class="card">
+    <section class="card" data-view="accounts">
       <h3>添加账号</h3>
       <div class="grid-2">
         <div>
@@ -245,7 +212,7 @@
       </div>
     </section>
 
-    <section class="card">
+    <section class="card" data-view="accounts">
       <h3>账号列表 / 额度</h3>
       <div class="row" style="margin-bottom:12px">
         <button id="checkinBtn">🎁 每日签到领 100 Credits</button>
@@ -286,12 +253,11 @@
       </table>
     </section>
 
-    <section class="card grid-2">
-      <div>
+    <section class="card" data-view="models" hidden>
         <h3>模型</h3>
         <div class="row" style="margin-bottom:10px; flex-wrap:wrap; gap:6px">
           <label style="margin:0">Context 档位</label>
-          <select id="ctxTierGlobal" style="width:130px">
+          <select id="ctxTierGlobal" style="width:180px">
             <option value="1M">1M</option>
           </select>
           <span class="muted" id="ctxTierHint">选择后对该实例所有模型生效</span>
@@ -299,14 +265,14 @@
           <span class="msg" id="ctxTierMsg"></span>
         </div>
         <div id="modelsBox">加载中...</div>
-      </div>
-      <div>
-        <h3>最近日志</h3>
-        <pre id="logsBox">加载中...</pre>
-      </div>
     </section>
 
-    <section class="card">
+    <section class="card" data-view="logs" hidden>
+      <h3>最近日志</h3>
+      <pre id="logsBox">加载中...</pre>
+    </section>
+
+    <section class="card" data-view="usage" hidden>
       <h3>模型调用日志 <span class="muted" style="font-size:12px">（每次上游调用的结构化记录，最新在前；仅内存保留最近 200 条）</span></h3>
       <div class="row" style="margin-bottom:10px; flex-wrap:wrap; gap:6px; align-items:center">
         <button class="secondary" id="callsAllBtn">全部</button>
@@ -317,7 +283,7 @@
       <div id="callsBox" style="font-size:12px">加载中...</div>
     </section>
 
-    <section class="card">
+    <section class="card" data-view="config" hidden>
       <h3>模型排队重试 <span class="muted" style="font-size:12px">（上游 10605 isQueued 拥塞时，同账号等待重试；换号无益）</span></h3>
       <div class="row" style="gap:8px; flex-wrap:wrap; align-items:center">
         <span style="font-size:12px">最多重试</span>
@@ -341,12 +307,12 @@
       </div>
     </section>
 
-    <section class="card">
+    <section class="card" data-view="usage" hidden>
       <h3>最近排队等待 <span class="muted" style="font-size:12px">（模型命中上游 10605 排队时的等待记录，最新在前）</span></h3>
       <div id="waitLogBox" style="font-size:12px">加载中...</div>
     </section>
 
-    <section class="card">
+    <section class="card" data-view="config" hidden>
       <h3>NewAPI / 中转站接入</h3>
       <div class="muted" style="margin-bottom:12px">
         把下面地址和密钥填到 NewAPI 渠道（OpenAI 兼容）。本地默认只监听 127.0.0.1。
@@ -401,7 +367,9 @@
       </div>
       <pre id="newapiBox" style="margin-top:12px"></pre>
     </section>
-  </main>
+    </main>
+  </div>
+</div>
 
   <script>
     const $ = (id) => document.getElementById(id);
@@ -427,6 +395,8 @@
     function setStatus(running, extra = {}) {
       $('statusDot').classList.toggle('on', !!running);
       $('statusText').textContent = running ? 'Bridge running' : 'Bridge stopped';
+      if ($('navPulse')) $('navPulse').classList.toggle('on', !!running);
+      if ($('navState')) $('navState').textContent = running ? 'Bridge running' : 'Bridge stopped';
       // 单控制台双桥：分别展示 CN 8963 与 Global 8964 的运行/启用状态
       const cnOn = !!running;
       const glOn = extra.global_running !== false && !!running;
@@ -683,14 +653,18 @@
         const u = org.used || 0;
         const t = org.cap || 0;              // 注意：总量字段是 cap，不是 total
         const r = org.remaining != null ? org.remaining : (t - u);
-        const pct = t > 0 ? Math.min(100, Math.round((u / t) * 100)) : 0;
+        const unlimited = !(t > 0);          // cap <= 0 表示不限上限（上游常见 -1）
+        const pct = unlimited ? 0 : Math.min(100, Math.round((u / t) * 100));
         const cls = pct >= 90 ? 'bad' : (pct >= 70 ? 'warn' : '');
         const state = org.available ? '' : ' <span class="muted">（当前不可用）</span>';
+        const amount = unlimited
+          ? `已用 ${fmtNum(u)} · 剩余 ${fmtNum(r)}${org.unit ? ' ' + org.unit : ''} <span class="muted">（不限上限）</span>`
+          : `已用 ${fmtNum(u)} / ${fmtNum(t)} · 剩余 ${fmtNum(r)}${org.unit ? ' ' + org.unit : ''}`;
         html += `
           <div class="quota-block addon-block">
             <strong>🏢 组织共享流量包</strong>${state}:
-            已用 ${fmtNum(u)} / ${fmtNum(t)} · 剩余 ${fmtNum(r)}${org.unit ? ' ' + org.unit : ''}<br/>
-            <div class="bar ${cls}"><i style="width:${pct}%"></i></div>
+            ${amount}<br/>
+            ${unlimited ? '' : `<div class="bar ${cls}"><i style="width:${pct}%"></i></div>`}
           </div>
         `;
       }
@@ -714,8 +688,8 @@
         const coolMs = slot ? (slot.cooling_remaining_ms || 0) : 0;
         const poolBadge = slot
           ? (coolMs > 0
-            ? `<span class="pill" style="border-color:#e6b800;background:#fff8e1;color:#8a6d00">冷却中 ${fmtDur(coolMs)}</span>`
-            : `<span class="pill" style="border-color:#8bc34a;background:#f1f8e9;color:#33691e">可用</span>`)
+            ? `<span class="pill" style="border-color:transparent;background:var(--warn-soft);color:var(--warn)">冷却中 ${fmtDur(coolMs)}</span>`
+            : `<span class="pill" style="border-color:transparent;background:var(--ok-soft);color:var(--ok)">可用</span>`)
           : '';
         const poolNote = (slot && coolMs > 0 && slot.last_error)
           ? `<div class="muted" style="font-size:11px">${slot.last_error}</div>` : '';
@@ -783,7 +757,7 @@
         ? `<span class="pill" style="border-color:${b[0]};background:${b[1]};color:${b[2]}">${b[3]}</span>`
         : (rep && rep.status === 'not_needed' ? '<span class="muted">PAT</span>' : '');
       const note = rep && rep.status === 'failed'
-        ? `<div class="muted" style="font-size:11px;color:#c62828" title="${(rep.message||'').replace(/"/g,'&quot;')}">${(rep.message||'').slice(0,40)}</div>`
+        ? `<div class="muted" style="font-size:11px;color:var(--bad)" title="${(rep.message||'').replace(/"/g,'&quot;')}">${(rep.message||'').slice(0,40)}</div>`
         : (rep && rep.status === 'ok'
           ? `<div class="muted" style="font-size:11px">下次 ${new Date(rep.next_refresh_at*1000).toLocaleDateString()}</div>`
           : '');
@@ -996,7 +970,7 @@
 
       try {
         const logs = await api('/api/logs');
-        const lines = (logs || []).slice(-40).map(x => `[${x.level}] ${x.message}`).join('\\n');
+        const lines = (logs || []).slice(-60).map(x => `[${new Date(x.time).toLocaleTimeString()}] [${x.level}] ${x.message}`).join('\n');
         $('logsBox').textContent = lines || '(empty)';
       } catch (e) {
         $('logsBox').textContent = e.message;
@@ -1366,6 +1340,50 @@
     };
 
     refresh();
+
+    // ---- 视图切换（左侧导航）------------------------------------------
+    const VIEWS = {
+      accounts: ['账号池', '账号、额度与签到'],
+      usage: ['用量', '模型调用、缓存命中与排队等待'],
+      config: ['配置', '接入信息、密钥与排队策略'],
+      models: ['模型档位', '模型清单、Context 档位与价格倍率'],
+      logs: ['运行日志', '服务原始日志（最近 100 条）'],
+    };
+    function showView(name) {
+      if (!VIEWS[name]) name = 'accounts';
+      document.querySelectorAll('[data-view]').forEach(el => {
+        if (el.closest('.nav')) return;
+        el.hidden = el.dataset.view !== name;
+      });
+      document.querySelectorAll('.nav a[data-view]').forEach(a => {
+        a.classList.toggle('on', a.dataset.view === name);
+      });
+      const meta = VIEWS[name];
+      if ($('viewTitle')) $('viewTitle').textContent = meta[0];
+      if ($('viewSub')) $('viewSub').textContent = meta[1];
+      if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
+    }
+    document.querySelectorAll('.nav a[data-view]').forEach(a => {
+      a.addEventListener('click', (e) => { e.preventDefault(); showView(a.dataset.view); });
+    });
+    window.addEventListener('hashchange', () => showView(location.hash.slice(1)));
+    showView(location.hash.slice(1) || 'accounts');
+
+    // ---- 明暗主题（记忆在浏览器本地）------------------------------------
+    function applyTheme(t) {
+      document.documentElement.dataset.theme = t;
+      if ($('themeBtn')) $('themeBtn').textContent = t === 'light' ? '🌙' : '☀️';
+      try { localStorage.setItem('q2a-theme', t); } catch (e) {}
+    }
+    if ($('themeBtn')) {
+      $('themeBtn').onclick = () => applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
+    }
+    (function () {
+      let t = 'dark';
+      try { t = localStorage.getItem('q2a-theme') || 'dark'; } catch (e) {}
+      applyTheme(t);
+    })();
+
     setInterval(refresh, 20000);
 
     // 显示/隐藏 API Key

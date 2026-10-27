@@ -287,6 +287,28 @@ access token 并回传新的 refresh_token）在过期前**主动续期**。
 `isQueued=true` 一律判为 `upstream_queued`（不换号、进入同账号等待）。
 
 **回归测试**：`TestParseUpstreamNestedErrorCallCountLimit` / `TestFriendlyUpstreamError_CallCountLimitQueued`。
+### 🧭 控制台重构：左侧导航（2026-10-28）
+
+**2026-10-28 CST** · 本地特性（`local/org-resource-package` 分支）
+
+参照 `workbuddy2api-panel` 的信息架构，把单页堆叠卡片改为**左侧导航 + 右侧内容区**：
+
+| 导航 | 内容 |
+|------|------|
+| 账号池 | 运行状态、添加账号、账号列表 / 额度 / 签到 / Token 续期 |
+| 用量 | 模型调用日志（含缓存命中与 credits）、最近排队等待 |
+| 配置 | 模型排队重试、NewAPI 接入、Bridge 密钥 / 端口、控制台密码 |
+| 模型档位 | 模型清单、Context 档位选择、价格倍率 |
+| 运行日志 | 服务原始日志 |
+
+其他改动：
+
+- 采用深色仪表盘设计令牌，顶栏可切换明暗主题（记忆在浏览器本地）；
+- 视图通过 URL hash 记忆（如 `#usage`），刷新/分享可直达；
+- 修复「最近日志」换行被转义成字面 `\n` 的问题，并补上时间戳；
+- 组织共享流量包 `cap <= 0`（上游用 `-1` 表示不限上限）时显示「不限上限」，不再出现 `/ -1`；
+- 移动端侧边栏自动变为顶部横向导航。
+
 ### 🎚️ 面板：Context 默认 1M + 模型价格倍率（2026-10-28）
 
 **2026-10-28 CST** · 本地特性（`local/org-resource-package` 分支）
