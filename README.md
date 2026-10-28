@@ -287,6 +287,32 @@ access token 并回传新的 refresh_token）在过期前**主动续期**。
 `isQueued=true` 一律判为 `upstream_queued`（不换号、进入同账号等待）。
 
 **回归测试**：`TestParseUpstreamNestedErrorCallCountLimit` / `TestFriendlyUpstreamError_CallCountLimitQueued`。
+### 🧲 账号池粘性 + 上游实际模型记录（2026-10-28）
+
+**2026-10-28 CST** · 本地特性（`local/org-resource-package` 分支）
+
+**粘性选号（`sticky_pool`，默认开启）**
+
+实测上游前缀缓存按账号冷启动：每个账号首次调用同一前缀都是全价，之后才命中
+（命中时 credits 约为未命中的 1/12~1/25）。严格轮询会让每个账号各自冷启动一次。
+现在默认优先复用**上次成功账号**；该账号失败/冷却/不支持目标模型时仍自动换号。
+控制台「配置 → 账号池策略」可随时开关，保存即生效。
+
+**上游实际模型记录（`remote_model`）**
+
+解析上游帧里的实际模型名（`model` / `model_key`），写入调用日志。
+`auto` 是上游路由模型，若它切换了底层模型，日志里会显示
+「上游实际：xxx」，同时缓存通常会失效——可用于核对成本波动原因。
+
+| 文件 | 内容 |
+|------|------|
+| `account/model.go` | `Settings.StickyPool` + `EffectiveStickyPool()`（默认 true）|
+| `internal/bridge/pool.go` | 全局粘性开关；`Pool.lastSuccess`；`Pick` 优先复用；`NoteSuccess` 记录 |
+| `internal/bridge/delta.go` | 解析上游实际模型名 |
+| `internal/bridge/calllog.go` · `bridge.go` | `RemoteModel` 写入调用记录 |
+| `main.go` · `service.go` | 设置热更新与启动应用 |
+| `webconsole/index.html` | 「账号池策略」卡片；调用日志显示上游实际模型；修复设置读取嵌套（`data.settings`）|
+
 ### 🧭 控制台重构：左侧导航（2026-10-28）
 
 **2026-10-28 CST** · 本地特性（`local/org-resource-package` 分支）

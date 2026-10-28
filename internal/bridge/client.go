@@ -297,6 +297,7 @@ func (c *BearerClient) openStreamLines(ctx context.Context, fullURL string, json
 		}
 
 		// 建流成功：进入流式读取，不再在本层重试
+		logger.Debug("upstream response headers: %v", resp.Header)
 		defer resp.Body.Close()
 		lineCh := make(chan string)
 		errCh := make(chan error, 1)

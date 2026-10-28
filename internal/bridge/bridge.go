@@ -513,6 +513,9 @@ func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages [
 		if d.OriginalCredits > 0 {
 			rec.OriginalCredits = d.OriginalCredits
 		}
+		if d.UpstreamModel != "" {
+			rec.RemoteModel = d.UpstreamModel
+		}
 		if d.ToolCalls != nil {
 			rec.HadToolCalls = true
 		}

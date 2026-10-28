@@ -269,3 +269,40 @@ func TestPickSlotForModelRoutesByRegion(t *testing.T) {
 		t.Fatalf("unknown model should fall back to any slot, got %v", s)
 	}
 }
+
+// TestPoolStickyRouting 验证粘性选号：成功账号被优先复用；
+// 冷却后回落轮询；关闭粘性后恢复严格轮询。
+func TestPoolStickyRouting(t *testing.T) {
+	SetStickyPool(true)
+	t.Cleanup(func() { SetStickyPool(true) })
+
+	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
+	first, ok := p.Pick(nil)
+	if !ok || first.ID != "a" {
+		t.Fatalf("first pick = %v, want a", first)
+	}
+	p.NoteSuccess("a")
+	// 轮询本应给 b，粘性应持续返回 a
+	for i := 0; i < 3; i++ {
+		s, ok := p.Pick(nil)
+		if !ok || s.ID != "a" {
+			t.Fatalf("sticky pick #%d = %v, want a", i, s)
+		}
+	}
+	// a 冷却 → 回落 b
+	p.Cool("a", time.Minute, "test")
+	if s, ok := p.Pick(nil); !ok || s.ID != "b" {
+		t.Fatalf("after cooling a, pick = %v, want b", s)
+	}
+
+	// 关闭粘性：新池严格轮询
+	SetStickyPool(false)
+	p2 := NewPool(testSlot(t, "c", "t"), testSlot(t, "d", "t"))
+	p2.NoteSuccess("c")
+	if s, _ := p2.Pick(nil); s.ID != "c" {
+		t.Fatalf("first pick = %v, want c", s)
+	}
+	if s, _ := p2.Pick(nil); s.ID != "d" {
+		t.Fatalf("second pick = %v, want d (rotation, sticky off)", s)
+	}
+}

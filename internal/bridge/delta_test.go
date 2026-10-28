@@ -66,7 +66,7 @@ func TestExtractDeltaUsageWithContent(t *testing.T) {
 // prompt_tokens_details.cached_tokens、completion_tokens_details.reasoning_tokens、
 // credits 与 original_credits。
 func TestExtractDeltaCacheAndCredits(t *testing.T) {
-	inner := `{"choices":[{"delta":{"content":"hi"}}],"usage":{` +
+	inner := `{"model":"qwen-actual","choices":[{"delta":{"content":"hi"}}],"usage":{` +
 		`"prompt_tokens":10617,"completion_tokens":12,` +
 		`"prompt_tokens_details":{"cached_tokens":10611,"cacheable_tokens":0},` +
 		`"completion_tokens_details":{"reasoning_tokens":8},` +
@@ -86,6 +86,9 @@ func TestExtractDeltaCacheAndCredits(t *testing.T) {
 	}
 	if d.Content != "hi" || d.InputTokens != 10617 || d.OutputTokens != 12 {
 		t.Errorf("content/usage lost: %+v", d)
+	}
+	if d.UpstreamModel != "qwen-actual" {
+		t.Errorf("upstream model = %q, want qwen-actual", d.UpstreamModel)
 	}
 }
 

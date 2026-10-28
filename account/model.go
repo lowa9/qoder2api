@@ -92,6 +92,15 @@ type Settings struct {
 	QueueWaitCapSec      int                          `json:"queue_wait_cap_sec,omitempty"`     // 单次排队等待上限（秒）；≤0 用默认 30，范围 1~300
 	QueueWaitDefaultSec  int                          `json:"queue_wait_default_sec,omitempty"` // 上游未给 retryAfter 时的默认等待（秒）；≤0 用默认 15，范围 1~300
 	QueueWaitFirstToken  *bool                        `json:"queue_wait_first_token,omitempty"` // 排队时「首字前一直等」；nil=用默认(true)。true=直到出首字或客户端断开才停（忽略重试次数）；false=按 queue_max_retries 封顶
+	StickyPool           *bool                        `json:"sticky_pool,omitempty"`            // 账号池粘性：优先复用上次成功账号以提升前缀缓存命中；nil=默认开启
+}
+
+// EffectiveStickyPool 返回账号池粘性的有效值；未设置（nil）时默认开启。
+func (s *Settings) EffectiveStickyPool() bool {
+	if s.StickyPool != nil {
+		return *s.StickyPool
+	}
+	return true
 }
 
 // EffectiveQueueWaitFirstToken 返回排队「首字前一直等」的有效值；未设置（nil）时默认开（true）。

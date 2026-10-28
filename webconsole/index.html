@@ -313,6 +313,22 @@ pre {
     </section>
 
     <section class="card" data-view="config" hidden>
+      <h3>账号池策略</h3>
+      <div class="row">
+        <label class="pill" style="cursor:pointer;margin-bottom:0">
+          <input type="checkbox" id="stickyPoolToggle" style="width:auto;margin-right:6px">
+          粘性选号（优先复用上次成功账号）
+        </label>
+        <button id="saveStickyBtn">保存</button>
+        <span class="msg" id="stickyMsg"></span>
+      </div>
+      <div class="muted" style="margin-top:8px">
+        开启后同一账号持续服务，上游前缀缓存更易命中（实测命中时 credits 约为未命中的 1/12~1/25）。
+        账号失败或冷却时仍会自动换号，不影响可用性。
+      </div>
+    </section>
+
+    <section class="card" data-view="config" hidden>
       <h3>NewAPI / 中转站接入</h3>
       <div class="muted" style="margin-bottom:12px">
         把下面地址和密钥填到 NewAPI 渠道（OpenAI 兼容）。本地默认只监听 127.0.0.1。
@@ -454,6 +470,9 @@ pre {
         }
         if (document.activeElement !== $('autoCheckinTimes')) {
           $('autoCheckinTimes').value = (st.auto_checkin_times || []).join(',');
+        }
+        if ($('stickyPoolToggle')) {
+          $('stickyPoolToggle').checked = (st.sticky_pool === undefined || st.sticky_pool === null) ? true : !!st.sticky_pool;
         }
       } catch (e) {
         fillConnection({}, {});
@@ -881,6 +900,9 @@ pre {
         const model = (r.upstream_model && r.upstream_model !== r.model)
           ? `${esc(r.model)} <span class="muted">→ ${esc(r.upstream_model)}</span>`
           : esc(r.model || '-');
+        // auto 等路由模型：显示上游回报的实际模型，便于确认是否换模型
+        const remote = (r.remote_model && r.remote_model !== r.upstream_model)
+          ? `<div class="muted" style="font-size:11px;margin-top:2px">上游实际：${esc(r.remote_model)}</div>` : '';
         const acct = r.account
           ? `${esc(r.account)} <span class="muted">(${esc(r.region || '-')})</span>`
           : '<span class="muted">未分配</span>';
@@ -906,7 +928,7 @@ pre {
           `<td style="white-space:nowrap">${t}</td>` +
           `<td>${callStatusBadge(r)}</td>` +
           `<td>${esc(r.protocol || '-')}</td>` +
-          `<td>${model}</td>` +
+          `<td>${model}${remote}</td>` +
           `<td>${acct}</td>` +
           `<td style="white-space:nowrap">${esc(flags)}</td>` +
           `<td style="text-align:right;white-space:nowrap">${tok}</td>` +
@@ -1006,12 +1028,13 @@ pre {
 
     async function loadCtxTier(models) {
       try {
-        const st = await api('/api/settings');
-        ctxTierCache.default = (st && st.context_tier_default) || '1M';
+        const data = await api('/api/settings');
+        const st = (data && data.settings) || {};
+        ctxTierCache.default = st.context_tier_default || '1M';
         renderCtxTierOptions(models);
         const hint = $('ctxTierHint');
         if (hint) {
-          const ov = (st && st.context_tier_overrides) || {};
+          const ov = st.context_tier_overrides || {};
           const n = Object.keys(ov).length;
           hint.textContent = (n ? `全局默认 + ${n} 个按模型覆盖` : '默认 1M；模型不支持所选档位时自动回落（如 auto 仅 200K）');
         }
@@ -1115,6 +1138,22 @@ pre {
       } catch (e) {
         $('connMsg').className = 'msg err';
         $('connMsg').textContent = e.message;
+      }
+    };
+
+    $('saveStickyBtn').onclick = async () => {
+      $('stickyMsg').className = 'msg';
+      $('stickyMsg').textContent = '保存中...';
+      try {
+        await api('/api/settings/save', {
+          method: 'POST',
+          body: JSON.stringify({ sticky_pool: $('stickyPoolToggle').checked }),
+        });
+        $('stickyMsg').className = 'msg ok';
+        $('stickyMsg').textContent = '已保存，即时生效';
+      } catch (e) {
+        $('stickyMsg').className = 'msg err';
+        $('stickyMsg').textContent = e.message;
       }
     };
 

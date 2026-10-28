@@ -21,3 +21,17 @@ func TestEffectiveQueueWaitFirstToken(t *testing.T) {
 		t.Error("explicit false should be false")
 	}
 }
+
+func TestEffectiveStickyPool(t *testing.T) {
+	if !(&Settings{}).EffectiveStickyPool() {
+		t.Error("nil (unset) should default to true")
+	}
+	tr := true
+	if !(&Settings{StickyPool: &tr}).EffectiveStickyPool() {
+		t.Error("explicit true should be true")
+	}
+	fa := false
+	if (&Settings{StickyPool: &fa}).EffectiveStickyPool() {
+		t.Error("explicit false should be false")
+	}
+}

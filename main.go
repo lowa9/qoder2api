@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"qoder2api/account"
+	"qoder2api/internal/bridge"
 	"qoder2api/internal/cosy"
 	"qoder2api/logger"
 )
@@ -507,6 +508,7 @@ func handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 		QueueWaitCapSec     *int  `json:"queue_wait_cap_sec"`
 		QueueWaitDefaultSec *int  `json:"queue_wait_default_sec"`
 		QueueWaitFirstToken *bool `json:"queue_wait_first_token"`
+		StickyPool          *bool `json:"sticky_pool"`
 		// 新格式：包含旧密码和新密码
 		ConsolePasswordNew *struct {
 			OldPassword string  `json:"old_password"`
@@ -597,6 +599,12 @@ func handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 		v := *req.QueueWaitFirstToken
 		cur.QueueWaitFirstToken = &v
 		logger.Info("queue wait_first_token set to %v", v)
+	}
+	if req.StickyPool != nil {
+		v := *req.StickyPool
+		cur.StickyPool = &v
+		bridge.SetStickyPool(v)
+		logger.Info("sticky pool set to %v", v)
 	}
 	if req.AutoCheckinTimes != nil {
 		var times []string

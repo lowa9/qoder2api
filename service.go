@@ -59,6 +59,8 @@ func (s *Service) LoadRuntimeSettings() {
 	s.bridgeToken = settings.BridgeToken
 	// 排队重试参数（控制台可配）：启动时应用，保存设置时再由 handleSaveSettings 热更新
 	bridge.ApplyQueueSettings(settings.QueueMaxRetries, settings.QueueWaitCapSec, settings.QueueWaitDefaultSec, settings.EffectiveQueueWaitFirstToken())
+	// 账号池粘性：优先复用上次成功账号，提升上游前缀缓存命中
+	bridge.SetStickyPool(settings.EffectiveStickyPool())
 }
 
 // ApplyQueueSettings 热更新模型排队重试参数（控制台保存设置后调用，即时生效）。

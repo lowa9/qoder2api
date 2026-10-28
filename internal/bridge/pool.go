@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"qoder2api/account"
@@ -20,6 +21,22 @@ import (
 
 // ErrNoAccount 池中没有任何可用账号。
 var ErrNoAccount = errors.New("no available account in pool")
+
+// stickyEnabled 账号池粘性：开启时优先复用上次成功账号。
+//
+// 动机：上游 prompt 缓存（cached_tokens）在实测中按账号冷启动——每个账号
+// 首次调用同一前缀都是全价，之后才命中（命中时代价约为未命中的 1/12~1/25）。
+// 严格轮询会让每个账号各自冷启动一次；粘性选号让同一账号持续服务，
+// 低频场景下可显著减少全价调用。失败/冷却时仍走正常换号逻辑。
+var stickyEnabled atomic.Bool
+
+func init() { stickyEnabled.Store(true) }
+
+// SetStickyPool 热更新粘性开关（控制台「账号池策略」）。
+func SetStickyPool(enabled bool) {
+	stickyEnabled.Store(enabled)
+	logger.Info("pool: sticky routing set to %v", enabled)
+}
 
 const (
 	// CooldownQuota 额度 / 权限类失败（上游 401/403，如 code 112 需要升级套餐）：
@@ -80,10 +97,11 @@ func (s *Slot) noteSuccess() {
 
 // Pool 是账号池：轮询选号，跳过冷却中与已试过的账号。
 type Pool struct {
-	mu        sync.Mutex
-	slots     []*Slot
-	cursor    int
-	statePath string // 非空时把冷却状态持久化到该文件（重启不丢）
+	mu          sync.Mutex
+	slots       []*Slot
+	cursor      int
+	lastSuccess string // 最近一次成功调用使用的账号 id（粘性选号优先复用）
+	statePath   string // 非空时把冷却状态持久化到该文件（重启不丢）
 }
 
 func NewPool(slots ...*Slot) *Pool { return &Pool{slots: slots} }
@@ -220,8 +238,26 @@ func (p *Pool) Pick(exclude map[string]struct{}, filters ...func(*Slot) bool) (*
 	}
 	p.mu.Lock()
 	start := p.cursor
+	stickyID := p.lastSuccess
 	p.mu.Unlock()
 	now := time.Now()
+
+	// 粘性：优先复用上次成功账号（未被排除、未冷却、满足 filter）。
+	// 不推进 cursor——粘性失效时轮询从原位置继续，保持换号顺序稳定。
+	if stickyEnabled.Load() && stickyID != "" {
+		if _, skip := exclude[stickyID]; !skip {
+			for _, s := range slots {
+				if s.ID != stickyID || !s.available(now) {
+					continue
+				}
+				if filter != nil && !filter(s) {
+					break
+				}
+				return s, true
+			}
+		}
+	}
+
 	for i := 0; i < n; i++ {
 		idx := (start + i) % n
 		s := slots[idx]
@@ -259,6 +295,9 @@ func (p *Pool) NoteSuccess(id string) {
 	for _, s := range p.snapshot() {
 		if s.ID == id {
 			s.noteSuccess()
+			p.mu.Lock()
+			p.lastSuccess = id
+			p.mu.Unlock()
 			p.save()
 			return
 		}

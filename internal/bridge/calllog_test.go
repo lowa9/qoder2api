@@ -19,7 +19,7 @@ func sseContentWithUsage(text string, in, out int) string {
 // sseContentWithCache 生成带缓存与计费明细的 usage 帧（对齐真实上游形态）。
 func sseContentWithCache(text string, in, out, cached int, credits float64) string {
 	inner := fmt.Sprintf(
-		`{"choices":[{"delta":{"content":%q}}],"usage":{`+
+		`{"model":"ds-actual","choices":[{"delta":{"content":%q}}],"usage":{`+
 			`"prompt_tokens":%d,"completion_tokens":%d,`+
 			`"prompt_tokens_details":{"cached_tokens":%d,"cacheable_tokens":0},`+
 			`"completion_tokens_details":{"reasoning_tokens":3},`+
@@ -74,6 +74,9 @@ func TestCallLogRecordsSuccess(t *testing.T) {
 	}
 	if rec.ReasoningTokens != 3 {
 		t.Errorf("reasoning = %d, want 3", rec.ReasoningTokens)
+	}
+	if rec.RemoteModel != "ds-actual" {
+		t.Errorf("remote model = %q, want ds-actual", rec.RemoteModel)
 	}
 	if rec.Credits != 0.05 || rec.OriginalCredits != 0.1 {
 		t.Errorf("credits = %v/%v, want 0.05/0.1", rec.Credits, rec.OriginalCredits)

@@ -11,12 +11,15 @@ import (
 )
 
 type Delta struct {
-	Role         string
-	Content      string
-	Reasoning    string // 上游推理过程（reasoning_content）
-	ToolCalls    []interface{}
-	InputTokens  int
-	OutputTokens int
+	Role      string
+	Content   string
+	Reasoning string // 上游推理过程（reasoning_content）
+	ToolCalls []interface{}
+	// UpstreamModel 上游帧里回报的实际模型名（若有）。用于核对 auto 路由
+	// 是否更换了底层模型——换模型会导致前缀缓存失效。
+	UpstreamModel string
+	InputTokens   int
+	OutputTokens  int
 	// 缓存与计费明细（上游 usage 携带，控制台调用日志展示）
 	CachedTokens    int     // prompt_tokens_details.cached_tokens
 	CacheableTokens int     // prompt_tokens_details.cacheable_tokens
@@ -78,8 +81,13 @@ func ExtractDelta(dataLine string) Delta {
 		usageOriginalCredits = cosy.FloatVal(usage, "original_credits")
 		// 缓存命中排查：上游若返回 cached_tokens 等明细，Debug 级落盘
 		if raw, err := json.Marshal(usage); err == nil {
-			logger.Debug("[usage] %s", string(raw))
+			logger.Debug("[usage] %s inner_keys=%v", string(raw), mapKeys(innerJSON))
 		}
+	}
+	// 上游回报的实际模型名（不同上游字段名略有差异，按优先级取）
+	upstreamModel, _ := innerJSON["model"].(string)
+	if upstreamModel == "" {
+		upstreamModel, _ = innerJSON["model_key"].(string)
 	}
 	choices, _ := innerJSON["choices"].([]interface{})
 	for _, ch := range choices {
@@ -97,7 +105,8 @@ func ExtractDelta(dataLine string) Delta {
 		}
 		if role != "" || content != "" || reasoning != "" || toolCalls != nil {
 			return Delta{Role: role, Content: content, Reasoning: reasoning, ToolCalls: toolCalls,
-				InputTokens: usageIn, OutputTokens: usageOut,
+				UpstreamModel: upstreamModel,
+				InputTokens:   usageIn, OutputTokens: usageOut,
 				CachedTokens: usageCached, CacheableTokens: usageCacheable,
 				ReasoningTokens: usageReasoning, Credits: usageCredits, OriginalCredits: usageOriginalCredits}
 		}
@@ -114,7 +123,7 @@ func ExtractDelta(dataLine string) Delta {
 	}
 	// choices 与业务 code 均未命中且 usage > 0：维持返回 usage-only Delta（行为同修复前）
 	if usageIn > 0 || usageOut > 0 {
-		return Delta{InputTokens: usageIn, OutputTokens: usageOut,
+		return Delta{UpstreamModel: upstreamModel, InputTokens: usageIn, OutputTokens: usageOut,
 			CachedTokens: usageCached, CacheableTokens: usageCacheable,
 			ReasoningTokens: usageReasoning, Credits: usageCredits, OriginalCredits: usageOriginalCredits}
 	}
