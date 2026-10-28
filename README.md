@@ -287,6 +287,25 @@ access token 并回传新的 refresh_token）在过期前**主动续期**。
 `isQueued=true` 一律判为 `upstream_queued`（不换号、进入同账号等待）。
 
 **回归测试**：`TestParseUpstreamNestedErrorCallCountLimit` / `TestFriendlyUpstreamError_CallCountLimitQueued`。
+### 💾 调用日志持久化 + 清空 + 积分面板置顶（2026-10-28）
+
+**2026-10-28 CST** · 本地特性（`local/org-resource-package` 分支）
+
+- **模型调用日志持久化**：写入 `call_history.json`（原子写盘，最多 2000 条，
+  文件 0600），重启不丢；此前仅内存 200 条。
+- **清空按钮**：调用日志与积分扣除历史各有一个「清空」，清空会同步重置磁盘文件，
+  之后从该时刻重新累积（内存与文件都归零，seq 从 1 开始）。
+- **积分扣除历史面板上移**：放到模型调用日志之前，避免日志过长时看不到总览。
+- **模型显示本名**：调用日志与积分历史中的模型列优先显示上游 `display_name`
+  （如 `dfmodel` → `DeepSeek-Flash`），key 保留在悬停提示中，便于排查时对照。
+
+| 接口 | 说明 |
+|------|------|
+| `GET /api/calls` | 调用日志（默认 100 条）|
+| `POST /api/calls/clear` | 清空调用日志 |
+| `GET /api/credits` | 积分历史聚合 |
+| `POST /api/credits/clear` | 清空积分历史 |
+
 ### 💳 新增：积分扣除历史（分账号 / 分模型）（2026-10-28）
 
 **2026-10-28 CST** · 本地特性（`local/org-resource-package` 分支）

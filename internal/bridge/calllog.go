@@ -2,10 +2,16 @@ package bridge
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"qoder2api/account"
+	"qoder2api/logger"
 )
 
 // CallRecord 是一次「模型调用」的结构化记录。
@@ -14,7 +20,8 @@ import (
 // 每次客户端请求（chat / claude / codex）最终落到一次或多次上游调用，
 // 记录实际使用的账号、映射后的模型、token 用量、耗时与结果。
 //
-// 仅保留最近 N 条（内存环形缓冲，不落盘），重启清空。
+// 保留最近 N 条并持久化到 credit 数据目录的 call_history.json；
+// 控制台可清空，清空后从该时刻重新累积。
 type CallRecord struct {
 	Seq           int       `json:"seq"`
 	Time          time.Time `json:"time"`           // 请求开始时间
@@ -79,17 +86,90 @@ func callMetaFrom(ctx context.Context) CallMeta {
 	return CallMeta{}
 }
 
-// callLog 固定容量环形缓冲（最新在前返回）。
+// callLog 固定容量环形缓冲（最新在前返回），并持久化到磁盘。
 type callLog struct {
 	mu      sync.Mutex
 	cap     int
 	nextSeq int
 	entries []CallRecord
+	path    string
+	loaded  bool
 }
 
-const callLogCapacity = 200
+const callLogCapacity = 2000
 
 var recentCallLog = &callLog{cap: callLogCapacity, nextSeq: 1}
+
+// callDiskFile call_history.json 的落盘结构。
+type callDiskFile struct {
+	Version int          `json:"version"`
+	Saved   string       `json:"saved,omitempty"`
+	Entries []CallRecord `json:"entries"`
+}
+
+func (c *callLog) filePath() string {
+	return filepath.Join(account.DataRoot(), "call_history.json")
+}
+
+// ensureLoaded 惰性加载（数据根目录可能在启动后才设置）。调用方必须持有 c.mu。
+func (c *callLog) ensureLoaded() {
+	path := c.filePath()
+	if c.loaded && c.path == path {
+		return
+	}
+	c.loaded = true
+	c.path = path
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			logger.Error("call log: read %s: %v", path, err)
+		}
+		return
+	}
+	var f callDiskFile
+	if err := json.Unmarshal(raw, &f); err != nil {
+		logger.Error("call log: parse %s: %v", path, err)
+		return
+	}
+	c.entries = f.Entries
+	if len(c.entries) > c.cap {
+		c.entries = append([]CallRecord(nil), c.entries[len(c.entries)-c.cap:]...)
+	}
+	c.nextSeq = 1
+	for _, e := range c.entries {
+		if e.Seq >= c.nextSeq {
+			c.nextSeq = e.Seq + 1
+		}
+	}
+	logger.Info("call log: restored %d entries (%s)", len(c.entries), path)
+}
+
+// saveLocked 原子写盘。调用方必须持有 c.mu。
+func (c *callLog) saveLocked() {
+	raw, err := json.Marshal(callDiskFile{
+		Version: 1,
+		Saved:   time.Now().Format(time.RFC3339),
+		Entries: c.entries,
+	})
+	if err != nil {
+		logger.Error("call log: marshal: %v", err)
+		return
+	}
+	if dir := filepath.Dir(c.path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			logger.Error("call log: mkdir: %v", err)
+			return
+		}
+	}
+	tmp := c.path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		logger.Error("call log: write tmp: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, c.path); err != nil {
+		logger.Error("call log: rename: %v", err)
+	}
+}
 
 func (c *callLog) record(rec CallRecord) {
 	if rec.Time.IsZero() {
@@ -97,21 +177,35 @@ func (c *callLog) record(rec CallRecord) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.ensureLoaded()
 	rec.Seq = c.nextSeq
 	c.nextSeq++
 	if len(c.entries) >= c.cap {
 		// 淘汰最旧一条（整体前移，保持容量）
 		copy(c.entries, c.entries[1:])
 		c.entries[len(c.entries)-1] = rec
-		return
+	} else {
+		c.entries = append(c.entries, rec)
 	}
-	c.entries = append(c.entries, rec)
+	c.saveLocked()
+}
+
+// clear 清空内存与磁盘记录；之后的新记录从 seq=1 重新累积。
+func (c *callLog) clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ensureLoaded()
+	c.entries = []CallRecord{}
+	c.nextSeq = 1
+	c.saveLocked()
+	logger.Info("call log: cleared by user (%s)", c.path)
 }
 
 // snapshot 返回最近 limit 条（最新在前）；limit<=0 返回全部。
 func (c *callLog) snapshot(limit int) []CallRecord {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.ensureLoaded()
 	n := len(c.entries)
 	if limit <= 0 || limit > n {
 		limit = n
@@ -128,12 +222,9 @@ func RecentCalls(limit int) []CallRecord {
 	return recentCallLog.snapshot(limit)
 }
 
-// ClearCalls 清空调用记录（测试用）。
+// ClearCalls 清空调用记录（内存与磁盘），供控制台「清空」按钮与测试使用。
 func ClearCalls() {
-	recentCallLog.mu.Lock()
-	recentCallLog.entries = nil
-	recentCallLog.nextSeq = 1
-	recentCallLog.mu.Unlock()
+	recentCallLog.clear()
 }
 
 // truncateRunesForLog 按 rune 截断，避免切断 UTF-8；空白折叠成单空格，

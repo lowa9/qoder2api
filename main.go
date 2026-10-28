@@ -169,7 +169,9 @@ func main() {
 	mux.HandleFunc("/api/models", handleListModels)
 	mux.HandleFunc("/api/logs", handleLogs)
 	mux.HandleFunc("/api/calls", handleCalls)
+	mux.HandleFunc("/api/calls/clear", handleClearCalls)
 	mux.HandleFunc("/api/credits", handleCredits)
+	mux.HandleFunc("/api/credits/clear", handleClearCredits)
 	mux.HandleFunc("/api/cleanup", handleCleanup)
 	mux.HandleFunc("/api/bridge/start", handleStartBridge)
 	mux.HandleFunc("/api/bridge/stop", handleStopBridge)
@@ -704,6 +706,26 @@ func handleCalls(w http.ResponseWriter, r *http.Request) {
 // handleCredits 返回积分扣除历史聚合（按账号 / 按模型）。
 func handleCredits(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, svc.CreditSummary())
+}
+
+// handleClearCalls 清空模型调用日志。
+func handleClearCalls(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("POST required"))
+		return
+	}
+	svc.ClearCalls()
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleClearCredits 清空积分扣除历史。
+func handleClearCredits(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("POST required"))
+		return
+	}
+	svc.ClearCreditHistory()
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func handleCleanup(w http.ResponseWriter, r *http.Request) {

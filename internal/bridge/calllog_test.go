@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"qoder2api/account"
 )
 
 // sseContentWithUsage 生成带 usage 的正常内容帧（上游在末帧合并 usage）。
@@ -31,6 +33,7 @@ func sseContentWithCache(text string, in, out, cached int, credits float64) stri
 // TestCallLogRecordsSuccess 验证一次成功调用被完整记录：
 // 协议/模型映射/账号/token/耗时/预览。
 func TestCallLogRecordsSuccess(t *testing.T) {
+	account.SetDataRoot(t.TempDir())
 	ClearCalls()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -97,6 +100,7 @@ func TestCallLogRecordsSuccess(t *testing.T) {
 
 // TestCallLogRecordsError 验证失败调用带错误类型与消息。
 func TestCallLogRecordsError(t *testing.T) {
+	account.SetDataRoot(t.TempDir())
 	ClearCalls()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
@@ -126,6 +130,7 @@ func TestCallLogRecordsError(t *testing.T) {
 
 // TestCallLogRecordsNoAccount 池中无账号时也应落一条记录（status=error）。
 func TestCallLogRecordsNoAccount(t *testing.T) {
+	account.SetDataRoot(t.TempDir())
 	ClearCalls()
 	b := &Bridge{templateBase: map[string]interface{}{}}
 	ctx := WithCallMeta(context.Background(), CallMeta{Protocol: "codex"})
@@ -143,6 +148,7 @@ func TestCallLogRecordsNoAccount(t *testing.T) {
 
 // TestCallLogRingCapacity 验证环形缓冲容量与「最新在前」顺序。
 func TestCallLogRingCapacity(t *testing.T) {
+	account.SetDataRoot(t.TempDir())
 	cl := &callLog{cap: 3, nextSeq: 1}
 	for i := 1; i <= 5; i++ {
 		cl.record(CallRecord{Protocol: fmt.Sprintf("p%d", i)})
@@ -174,5 +180,36 @@ func TestTruncateRunesForLog(t *testing.T) {
 	got := truncateRunesForLog("你好世界你好世界", 4)
 	if got != "你好世界…" {
 		t.Errorf("truncate = %q, want 你好世界…", got)
+	}
+}
+
+// TestCallLogPersistsAndClears 验证调用日志落盘、重启恢复与清空。
+func TestCallLogPersistsAndClears(t *testing.T) {
+	account.SetDataRoot(t.TempDir())
+
+	l1 := &callLog{cap: 10, nextSeq: 1}
+	l1.record(CallRecord{Protocol: "chat", Model: "auto", Status: CallStatusOK})
+	l1.record(CallRecord{Protocol: "claude", Model: "dfmodel", Status: CallStatusOK})
+
+	// 模拟重启：新实例从同一路径恢复
+	l2 := &callLog{cap: 10}
+	got := l2.snapshot(0)
+	if len(got) != 2 || got[0].Model != "dfmodel" {
+		t.Fatalf("reloaded = %+v", got)
+	}
+	if l2.nextSeq != 3 {
+		t.Errorf("next seq = %d, want 3", l2.nextSeq)
+	}
+
+	// 清空后磁盘同步为空
+	l2.clear()
+	l3 := &callLog{cap: 10}
+	if got := l3.snapshot(0); len(got) != 0 {
+		t.Fatalf("after clear = %+v", got)
+	}
+	// 清空后新记录从 seq=1 重新累积
+	l3.record(CallRecord{Protocol: "chat", Model: "auto"})
+	if got := l3.snapshot(0); len(got) != 1 || got[0].Seq != 1 {
+		t.Fatalf("after clear record = %+v", got)
 	}
 }

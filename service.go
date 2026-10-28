@@ -471,6 +471,12 @@ func (s *Service) CreditSummary() bridge.CreditSummaryView {
 	return bridge.CreditSummary()
 }
 
+// ClearCalls 清空模型调用日志（内存与磁盘）。
+func (s *Service) ClearCalls() { bridge.ClearCalls() }
+
+// ClearCreditHistory 清空积分扣除历史（内存与磁盘）。
+func (s *Service) ClearCreditHistory() { bridge.ClearCreditHistory() }
+
 func (s *Service) GetAccountQuota(accountID string) (*account.QuotaInfo, error) {
 	acct, err := account.Get(accountID)
 	if err != nil {

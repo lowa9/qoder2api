@@ -278,26 +278,29 @@ pre {
     </section>
 
     <section class="card" data-view="usage" hidden>
-      <h3>模型调用日志 <span class="muted" style="font-size:12px">（每次上游调用的结构化记录，最新在前；仅内存保留最近 200 条）</span></h3>
-      <div class="row" style="margin-bottom:10px; flex-wrap:wrap; gap:6px; align-items:center">
-        <button class="secondary" id="callsAllBtn">全部</button>
-        <button class="secondary" id="callsErrBtn">仅错误</button>
-        <button class="secondary" id="callsOkBtn">仅成功</button>
-        <span class="muted" id="callsHint" style="font-size:12px"></span>
-      </div>
-      <div id="callsBox" style="font-size:12px">加载中...</div>
-    </section>
-
-    <section class="card" data-view="usage" hidden>
       <h3>积分扣除历史 <span class="muted" style="font-size:12px">（按上游 usage.credits 逐次入账，持久化于 credit_history.json）</span></h3>
       <div class="row" style="margin-bottom:10px; gap:6px">
         <button class="secondary" id="creditAcctBtn">按账号</button>
         <button class="secondary" id="creditModelBtn">按模型</button>
+        <button class="secondary" id="creditClearBtn" title="清空后从当前时刻重新累积">清空</button>
         <span class="muted" id="creditHint" style="font-size:12px"></span>
       </div>
       <div class="kpis" id="creditStats"></div>
       <div id="creditBox" style="font-size:12px; margin-top:12px">加载中...</div>
     </section>
+
+    <section class="card" data-view="usage" hidden>
+      <h3>模型调用日志 <span class="muted" style="font-size:12px">（每次上游调用的结构化记录，最新在前；持久化于 call_history.json，最多 2000 条）</span></h3>
+      <div class="row" style="margin-bottom:10px; flex-wrap:wrap; gap:6px; align-items:center">
+        <button class="secondary" id="callsAllBtn">全部</button>
+        <button class="secondary" id="callsErrBtn">仅错误</button>
+        <button class="secondary" id="callsOkBtn">仅成功</button>
+        <button class="secondary" id="callsClearBtn" title="清空后从当前时刻重新累积">清空</button>
+        <span class="muted" id="callsHint" style="font-size:12px"></span>
+      </div>
+      <div id="callsBox" style="font-size:12px">加载中...</div>
+    </section>
+
 
     <section class="card" data-view="config" hidden>
       <h3>模型排队重试 <span class="muted" style="font-size:12px">（上游 10605 isQueued 拥塞时，同账号等待重试；换号无益）</span></h3>
@@ -924,9 +927,11 @@ pre {
       }
       const body = rows.map(r => {
         const t = new Date(r.time).toLocaleTimeString();
+        const clientName = modelLabel(r.model);
+        const upstreamName = modelLabel(r.upstream_model);
         const model = (r.upstream_model && r.upstream_model !== r.model)
-          ? `${esc(r.model)} <span class="muted">→ ${esc(r.upstream_model)}</span>`
-          : esc(r.model || '-');
+          ? `<span title="${esc(r.model)} → ${esc(r.upstream_model)}">${esc(clientName)} <span class="muted">→ ${esc(upstreamName)}</span></span>`
+          : `<span title="${esc(r.upstream_model || '')}">${esc(clientName)}</span>`;
         // auto 等路由模型：显示上游回报的实际模型，便于确认是否换模型。
         // 实测上游对显式模型（dfmodel/qfmodel）也回显 "auto"，该值不可信，
         // 仅在既不同于映射值、又不是 "auto" 时展示。
@@ -990,6 +995,17 @@ pre {
     let creditCache = null;
     let creditDim = 'account';
 
+    // 模型 key -> 上游显示名（如 dfmodel -> DeepSeek-Flash）
+    let modelNameByKey = {};
+    function modelLabel(key) { return (key && modelNameByKey[key]) || key || '-'; }
+    function buildModelNames(models) {
+      modelNameByKey = {};
+      (models || []).forEach(m => {
+        const k = m.id || m.key;
+        if (k) modelNameByKey[k] = m.display_name || k;
+      });
+    }
+
     function fmtCredit(n) { return (Number(n) || 0).toFixed(4); }
     function creditCacheCell(hit, miss) {
       const h = Number(hit || 0), m = Number(miss || 0), t = h + m;
@@ -1026,7 +1042,7 @@ pre {
         : '<tr><th>账号</th><th style="text-align:right">请求</th><th style="text-align:right">扣除积分</th><th style="text-align:right">样本 Token</th><th style="text-align:right">积分 / 1M</th><th style="text-align:right">缓存命中率</th></tr>';
       const body = rows.map(r => {
         if (creditDim === 'model') {
-          return `<tr><td>${esc(r.key || '—')}</td>` +
+          return `<tr><td title="${esc(r.key || '')}">${esc(modelLabel(r.key))}</td>` +
             `<td style="text-align:right">${r.price_factor ? '×' + r.price_factor : '-'}</td>` +
             `<td style="text-align:right">${fmtNum(r.requests)}</td>` +
             `<td style="text-align:right">${fmtCredit(r.credits)}</td>` +
@@ -1081,6 +1097,9 @@ pre {
       try {
         const res = await api('/api/models');
         const models = Array.isArray(res) ? res : (res && res.data) || [];
+        buildModelNames(models);
+        renderCalls();
+        renderCredits();
         $('modelsBox').innerHTML = renderModelsTable(models);
         renderCtxTierOptions(models);
         loadCtxTier(models);
@@ -1164,6 +1183,22 @@ pre {
     // 积分扣除维度切换
     $('creditAcctBtn').onclick = () => { creditDim = 'account'; renderCredits(); };
     $('creditModelBtn').onclick = () => { creditDim = 'model'; renderCredits(); };
+
+    // 清空历史（持久化文件同步重置，之后从此刻重新累积）
+    $('callsClearBtn').onclick = async () => {
+      if (!confirm('确定清空模型调用日志？清空后从当前时刻重新累积。')) return;
+      try {
+        await api('/api/calls/clear', { method: 'POST' });
+        await loadCalls();
+      } catch (e) { alert('清空失败：' + e.message); }
+    };
+    $('creditClearBtn').onclick = async () => {
+      if (!confirm('确定清空积分扣除历史？清空后从当前时刻重新累积。')) return;
+      try {
+        await api('/api/credits/clear', { method: 'POST' });
+        await loadCredits();
+      } catch (e) { alert('清空失败：' + e.message); }
+    };
 
     // 调用日志筛选
     $('callsAllBtn').onclick = () => { callsFilter = 'all'; renderCalls(); };

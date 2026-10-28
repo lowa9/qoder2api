@@ -138,6 +138,17 @@ func RecordCredit(e CreditEntry) {
 	creditBook.record(e)
 }
 
+// ClearCreditHistory 清空积分扣除历史（内存与磁盘），之后从零重新累积。
+func ClearCreditHistory() {
+	l := creditBook
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.ensureLoaded()
+	l.entries = []CreditEntry{}
+	l.saveLocked()
+	logger.Info("credit ledger: cleared by user (%s)", l.filePath())
+}
+
 // CreditAgg 账号或模型维度的聚合。
 type CreditAgg struct {
 	Key             string  `json:"key"`
