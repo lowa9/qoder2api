@@ -531,6 +531,17 @@ pre {
         const tiers = (m.context_tiers && m.context_tiers.length)
           ? m.context_tiers.map(t => `${t.name}${t.is_default ? '*' : ''}`).join(' / ')
           : '-';
+        // 思考能力：上游 thinking_config 才是准确信号（is_reasoning 对
+        // dfmodel / kmodel_latest 标 false，但它们其实支持开关思考）
+        const think = (() => {
+          if (m.thinking_support) {
+            const state = m.thinking_default ? '默认开' : '可开关';
+            const eff = (m.thinking_efforts || []).join(' / ');
+            return `${state}${eff ? `<div class="muted" style="font-size:11px">${eff}</div>` : ''}`;
+          }
+          if (m.is_reasoning) return '常开';
+          return '<span class="muted">不支持</span>';
+        })();
         const price = (m.price_factor != null) ? `×${m.price_factor}` : '-';
         return `<tr>
           <td>${name}</td>
@@ -539,7 +550,7 @@ pre {
           <td class="muted" style="font-size:11px">${tiers}</td>
           <td>${maxOut}</td>
           <td style="text-align:right">${price}</td>
-          <td>${m.is_reasoning ? '✅' : ''}</td>
+          <td>${think}</td>
           <td>${m.enable === false ? '❌' : '✅'}</td>
         </tr>`;
       }).join('');
@@ -552,7 +563,7 @@ pre {
             <th>可用档位</th>
             <th>最大输出</th>
             <th style="text-align:right">价格倍率</th>
-            <th>推理</th>
+            <th>思考</th>
             <th>启用</th>
           </tr>
         </thead>

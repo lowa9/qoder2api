@@ -164,3 +164,53 @@ func TestResolveContextTokensDefault1M(t *testing.T) {
 		t.Errorf("configured tier = %d, want 400000", got)
 	}
 }
+
+// TestParseQoderModels_Thinking 验证思考能力来自 thinking_config，
+// 而不是 is_reasoning（上游对 dfmodel/kmodel_latest 标 false 但支持思考）。
+func TestParseQoderModels_Thinking(t *testing.T) {
+	raw := map[string]interface{}{
+		"assistant": []interface{}{
+			map[string]interface{}{
+				"key": "dfmodel", "enable": true, "is_reasoning": false,
+				"thinking_config": map[string]interface{}{
+					"enabled": map[string]interface{}{
+						"is_default": true,
+						"efforts": map[string]interface{}{
+							"max": map[string]interface{}{}, "low": map[string]interface{}{}, "high": map[string]interface{}{},
+						},
+					},
+					"disabled": map[string]interface{}{"description": "Disable thinking"},
+				},
+			},
+			map[string]interface{}{
+				"key": "mmodel", "enable": true, "is_reasoning": false,
+			},
+			map[string]interface{}{
+				"key": "auto", "enable": true, "is_reasoning": true,
+			},
+		},
+	}
+	models := parseQoderModels(raw)
+	if len(models) != 3 {
+		t.Fatalf("got %d models, want 3", len(models))
+	}
+	df := models[0]
+	if !df.ThinkingSupport || !df.ThinkingDefault {
+		t.Errorf("dfmodel thinking support/default = %v/%v, want true/true", df.ThinkingSupport, df.ThinkingDefault)
+	}
+	want := []string{"low", "high", "max"}
+	if len(df.ThinkingEfforts) != len(want) {
+		t.Fatalf("efforts = %v, want %v", df.ThinkingEfforts, want)
+	}
+	for i, w := range want {
+		if df.ThinkingEfforts[i] != w {
+			t.Errorf("efforts[%d] = %q, want %q (ordered)", i, df.ThinkingEfforts[i], w)
+		}
+	}
+	if mm := models[1]; mm.ThinkingSupport || mm.IsReasoning {
+		t.Errorf("mmodel should have no thinking support, got %+v", mm)
+	}
+	if au := models[2]; au.ThinkingSupport || !au.IsReasoning {
+		t.Errorf("auto should be is_reasoning-only, got %+v", au)
+	}
+}
