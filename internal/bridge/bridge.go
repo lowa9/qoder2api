@@ -253,6 +253,19 @@ func parseQoderModels(resp map[string]interface{}) []QoderModel {
 	return nil
 }
 
+// priceFactorFor 从已加载的模型目录中取价格倍率（不触发网络请求）。
+// 目录尚未加载时返回 0（积分历史里仅缺倍率展示，不影响扣费统计）。
+func (b *Bridge) priceFactorFor(model string) float64 {
+	b.catalogCacheMu.Lock()
+	defer b.catalogCacheMu.Unlock()
+	for _, m := range b.catalogCache {
+		if strings.EqualFold(m.Key, model) {
+			return m.PriceFactor
+		}
+	}
+	return 0
+}
+
 // sortThinkingEfforts 按 low < medium < high < xhigh < max 排序，
 // 未知值按字母序排在后面，保证控制台展示稳定。
 func sortThinkingEfforts(v []string) {
@@ -525,6 +538,22 @@ func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages [
 			rec.ErrorMessage = truncateRunesForLog(rec.ErrorMessage, 240)
 		}
 		recentCallLog.record(rec)
+		// 积分扣除历史：仅记录成功且有实际扣费的调用（免费模型 credits=0）
+		if rec.Status == CallStatusOK && rec.Credits > 0 {
+			RecordCredit(CreditEntry{
+				Time:         rec.Time,
+				Account:      rec.Account,
+				AccountID:    rec.AccountID,
+				Region:       rec.Region,
+				Model:        rec.UpstreamModel,
+				Protocol:     rec.Protocol,
+				Credits:      rec.Credits,
+				PriceFactor:  b.priceFactorFor(rec.UpstreamModel),
+				PromptTokens: rec.InputTokens,
+				CachedTokens: rec.CachedTokens,
+				OutputTokens: rec.OutputTokens,
+			})
+		}
 	}()
 
 	// 包装 delta 回调：顺带累计 token 用量与工具调用标记（不改动调用方逻辑）。

@@ -287,6 +287,28 @@ access token 并回传新的 refresh_token）在过期前**主动续期**。
 `isQueued=true` 一律判为 `upstream_queued`（不换号、进入同账号等待）。
 
 **回归测试**：`TestParseUpstreamNestedErrorCallCountLimit` / `TestFriendlyUpstreamError_CallCountLimitQueued`。
+### 💳 新增：积分扣除历史（分账号 / 分模型）（2026-10-28）
+
+**2026-10-28 CST** · 本地特性（`local/org-resource-package` 分支）
+
+参照 `workbuddy2api-panel` 的「积分扣除历史」：每次成功调用把上游
+`usage.credits` 落盘（`credit_history.json`，最多 5000 条），按账号 / 按模型聚合。
+
+| 指标 | 说明 |
+|------|------|
+| 扣除积分 | 逐次 credits 求和（免费模型 credits=0 不入账）|
+| 样本 Token | 与积分同时观测到的 prompt token |
+| 积分 / 1M Token | 折算单价，越低越划算 |
+| 缓存命中率 | `cached / prompt`，颜色分级（≥90% 绿 / ≥80% 黄 / 其余红）|
+
+- `internal/bridge/creditledger.go`：原子写盘（tmp+rename）、惰性加载、
+  5000 条上限、账号/模型聚合；
+- `bridge.go` 在调用结束时入账（记录时间和账号/模型/协议/token/倍率）；
+- `GET /api/credits` 返回 totals + by_account + by_model + recent 50；
+- 控制台「用量 → 积分扣除历史」：按账号 / 按模型切换，KPI 卡片 + 表格；
+- 与调用日志的区别：调用日志是最近 200 条内存记录，积分历史**持久化**
+  且按维度聚合，重启不丢。
+
 ### 🧠 修正模型「思考」能力显示（2026-10-28）
 
 **2026-10-28 CST** · 本地特性（`local/org-resource-package` 分支）

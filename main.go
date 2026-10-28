@@ -169,6 +169,7 @@ func main() {
 	mux.HandleFunc("/api/models", handleListModels)
 	mux.HandleFunc("/api/logs", handleLogs)
 	mux.HandleFunc("/api/calls", handleCalls)
+	mux.HandleFunc("/api/credits", handleCredits)
 	mux.HandleFunc("/api/cleanup", handleCleanup)
 	mux.HandleFunc("/api/bridge/start", handleStartBridge)
 	mux.HandleFunc("/api/bridge/stop", handleStopBridge)
@@ -698,6 +699,11 @@ func handleCalls(w http.ResponseWriter, r *http.Request) {
 		limit = 200
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"calls": svc.RecentCalls(limit)})
+}
+
+// handleCredits 返回积分扣除历史聚合（按账号 / 按模型）。
+func handleCredits(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, svc.CreditSummary())
 }
 
 func handleCleanup(w http.ResponseWriter, r *http.Request) {

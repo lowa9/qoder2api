@@ -466,6 +466,11 @@ func (s *Service) RecentCalls(limit int) []bridge.CallRecord {
 	return bridge.RecentCalls(limit)
 }
 
+// CreditSummary 返回积分扣除历史聚合（按账号 / 按模型）。
+func (s *Service) CreditSummary() bridge.CreditSummaryView {
+	return bridge.CreditSummary()
+}
+
 func (s *Service) GetAccountQuota(accountID string) (*account.QuotaInfo, error) {
 	acct, err := account.Get(accountID)
 	if err != nil {

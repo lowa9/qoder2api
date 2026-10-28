@@ -105,6 +105,11 @@ pre {
   padding: 12px; border: 1px solid var(--line);
 }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.kpi { background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: 10px; padding: 10px 12px; }
+.kpi .v { font-size: 17px; font-weight: 650; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.kpi .k { color: var(--ink-3); font-size: 11.5px; margin-top: 2px; }
+@media (max-width: 860px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 /* ── 额度与账号 ───────────────────────────────────────────────────── */
 .quota { font-size: 12px; line-height: 1.5; color: var(--ink-3); width: 100%; max-width: 320px; }
@@ -281,6 +286,17 @@ pre {
         <span class="muted" id="callsHint" style="font-size:12px"></span>
       </div>
       <div id="callsBox" style="font-size:12px">加载中...</div>
+    </section>
+
+    <section class="card" data-view="usage" hidden>
+      <h3>积分扣除历史 <span class="muted" style="font-size:12px">（按上游 usage.credits 逐次入账，持久化于 credit_history.json）</span></h3>
+      <div class="row" style="margin-bottom:10px; gap:6px">
+        <button class="secondary" id="creditAcctBtn">按账号</button>
+        <button class="secondary" id="creditModelBtn">按模型</button>
+        <span class="muted" id="creditHint" style="font-size:12px"></span>
+      </div>
+      <div class="kpis" id="creditStats"></div>
+      <div id="creditBox" style="font-size:12px; margin-top:12px">加载中...</div>
     </section>
 
     <section class="card" data-view="config" hidden>
@@ -911,8 +927,10 @@ pre {
         const model = (r.upstream_model && r.upstream_model !== r.model)
           ? `${esc(r.model)} <span class="muted">→ ${esc(r.upstream_model)}</span>`
           : esc(r.model || '-');
-        // auto 等路由模型：显示上游回报的实际模型，便于确认是否换模型
-        const remote = (r.remote_model && r.remote_model !== r.upstream_model)
+        // auto 等路由模型：显示上游回报的实际模型，便于确认是否换模型。
+        // 实测上游对显式模型（dfmodel/qfmodel）也回显 "auto"，该值不可信，
+        // 仅在既不同于映射值、又不是 "auto" 时展示。
+        const remote = (r.remote_model && r.remote_model !== r.upstream_model && r.remote_model !== 'auto')
           ? `<div class="muted" style="font-size:11px;margin-top:2px">上游实际：${esc(r.remote_model)}</div>` : '';
         const acct = r.account
           ? `${esc(r.account)} <span class="muted">(${esc(r.region || '-')})</span>`
@@ -968,6 +986,74 @@ pre {
       }
     }
 
+    // ---- 积分扣除历史（按账号 / 按模型）---------------------------------
+    let creditCache = null;
+    let creditDim = 'account';
+
+    function fmtCredit(n) { return (Number(n) || 0).toFixed(4); }
+    function creditCacheCell(hit, miss) {
+      const h = Number(hit || 0), m = Number(miss || 0), t = h + m;
+      if (!t) return '<span class="muted">—</span>';
+      const p = h / t * 100;
+      const color = p >= 90 ? 'var(--ok)' : (p >= 80 ? 'var(--warn)' : 'var(--bad)');
+      return `<span style="color:${color}" title="命中 ${fmtNum(h)} / 未命中 ${fmtNum(m)}">${p.toFixed(1)}%</span>`;
+    }
+    function creditKpi(v, k) { return `<div class="kpi"><div class="v">${v}</div><div class="k">${k}</div></div>`; }
+
+    function renderCredits() {
+      const d = creditCache || {};
+      const t = d.totals || {};
+      $('creditStats').innerHTML =
+        creditKpi(fmtCredit(t.credits), '扣除积分') +
+        creditKpi(fmtNum(t.prompt_tokens), '样本 Token') +
+        creditKpi(fmtCredit(t.credits_per_1m_tokens), '积分 / 1M Token') +
+        creditKpi(creditCacheCell(t.cache_hit_tokens, t.cache_miss_tokens), '缓存命中率') +
+        creditKpi(fmtNum(d.entries || 0), '入账记录');
+      $('creditAcctBtn').className = 'secondary' + (creditDim === 'account' ? '' : '');
+      $('creditModelBtn').className = 'secondary';
+      $('creditHint').textContent =
+        `${(d.by_account || []).length} 个账号 · ${(d.by_model || []).length} 个模型` +
+        (d.since ? ` · 数据自 ${String(d.since).replace('T', ' ').slice(0, 16)}` : '') +
+        (d.file_bytes ? ` · 文件 ${(d.file_bytes / 1024).toFixed(1)} KB` : '');
+
+      const rows = creditDim === 'model' ? (d.by_model || []) : (d.by_account || []);
+      if (!rows.length) {
+        $('creditBox').innerHTML = '<span class="muted">暂无积分扣除记录（成功调用产生 credits 后自动入账）</span>';
+        return;
+      }
+      const head = creditDim === 'model'
+        ? '<tr><th>模型</th><th style="text-align:right">倍率</th><th style="text-align:right">请求</th><th style="text-align:right">扣除积分</th><th style="text-align:right">样本 Token</th><th style="text-align:right">积分 / 1M</th><th style="text-align:right">缓存命中率</th></tr>'
+        : '<tr><th>账号</th><th style="text-align:right">请求</th><th style="text-align:right">扣除积分</th><th style="text-align:right">样本 Token</th><th style="text-align:right">积分 / 1M</th><th style="text-align:right">缓存命中率</th></tr>';
+      const body = rows.map(r => {
+        if (creditDim === 'model') {
+          return `<tr><td>${esc(r.key || '—')}</td>` +
+            `<td style="text-align:right">${r.price_factor ? '×' + r.price_factor : '-'}</td>` +
+            `<td style="text-align:right">${fmtNum(r.requests)}</td>` +
+            `<td style="text-align:right">${fmtCredit(r.credits)}</td>` +
+            `<td style="text-align:right">${fmtNum(r.prompt_tokens)}</td>` +
+            `<td style="text-align:right">${fmtCredit(r.credits_per_1m_tokens)}</td>` +
+            `<td style="text-align:right">${creditCacheCell(r.cache_hit_tokens, r.cache_miss_tokens)}</td></tr>`;
+        }
+        const id8 = String(r.key || '').split('|').pop() || '';
+        return `<tr><td>${esc(r.nickname || id8)} <span class="muted">(${esc(r.region || '-')} · ${esc(String(r.key || '').slice(0, 8))})</span></td>` +
+          `<td style="text-align:right">${fmtNum(r.requests)}</td>` +
+          `<td style="text-align:right">${fmtCredit(r.credits)}</td>` +
+          `<td style="text-align:right">${fmtNum(r.prompt_tokens)}</td>` +
+          `<td style="text-align:right">${fmtCredit(r.credits_per_1m_tokens)}</td>` +
+          `<td style="text-align:right">${creditCacheCell(r.cache_hit_tokens, r.cache_miss_tokens)}</td></tr>`;
+      }).join('');
+      $('creditBox').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead style="color:var(--ink-3)">${head}</thead><tbody>${body}</tbody></table>`;
+    }
+
+    async function loadCredits() {
+      try {
+        creditCache = await api('/api/credits');
+        renderCredits();
+      } catch (e) {
+        $('creditBox').innerHTML = `<span class="msg err">${esc(e.message)}</span>`;
+      }
+    }
+
     async function refresh() {
       try {
         const status = await api('/api/status');
@@ -979,6 +1065,7 @@ pre {
       await loadConnection();
       loadWaitLog();
       loadCalls();
+      loadCredits();
 
       try {
         let pool = null;
@@ -1073,6 +1160,10 @@ pre {
 
     $('ctxTierSave').onclick = saveCtxTier;
     $('refreshBtn').onclick = refresh;
+
+    // 积分扣除维度切换
+    $('creditAcctBtn').onclick = () => { creditDim = 'account'; renderCredits(); };
+    $('creditModelBtn').onclick = () => { creditDim = 'model'; renderCredits(); };
 
     // 调用日志筛选
     $('callsAllBtn').onclick = () => { callsFilter = 'all'; renderCalls(); };
