@@ -58,14 +58,38 @@ type Slot struct {
 	sess   *cosy.SessionContext
 	client *BearerClient
 
+	// secret 原始凭证（PAT / OAuth JSON），用于会话过期时重新交换。
+	// fp 为该账号的现代协议指纹（可为 nil），刷新时保持一致。
+	secret string
+	fp     *account.CheckinFingerprint
+
 	mu            sync.Mutex
 	cooldownUntil time.Time
 	lastErr       string
+
+	// 会话续期：refreshMu 保护 lastRefreshAttempt，避免并发重复交换。
+	refreshMu          sync.Mutex
+	lastRefreshAttempt time.Time
 
 	// 该账号所在区域的可用模型目录缓存（用于按模型路由到正确区域）。
 	catalogMu sync.Mutex
 	catalog   map[string]bool
 	catalogAt time.Time
+}
+
+// snapshot 返回当前会话与客户端的快照。会话可能被续期替换，读取必须走此方法。
+func (s *Slot) snapshot() (*cosy.SessionContext, *BearerClient) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sess, s.client
+}
+
+// replaceSession 原子替换会话与客户端（续期后调用）。
+func (s *Slot) replaceSession(sess *cosy.SessionContext, client *BearerClient) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sess = sess
+	s.client = client
 }
 
 // NewSlot 组装一个池内账号。
@@ -338,6 +362,20 @@ func ShouldFailover(err error) bool {
 	}
 	// 裸传输错误（TLS EOF / 超时等）
 	return IsTransientTransport(err)
+}
+
+// isLoginExpired 判断上游错误是否为「会话过期」（code 105）。
+// 这类错误可通过重新交换凭证自愈，不应直接冷却 30 分钟。
+func isLoginExpired(err error) bool {
+	var ue *UpstreamError
+	if !errors.As(err, &ue) {
+		return false
+	}
+	if ue.Status != http.StatusUnauthorized && ue.Status != http.StatusForbidden {
+		return false
+	}
+	d := strings.ToLower(ue.Detail)
+	return strings.Contains(d, `"code":"105"`) || strings.Contains(d, "login expired")
 }
 
 // isAccountExhaustedDetail 识别流内业务错误里「该账号已耗尽」的语义。

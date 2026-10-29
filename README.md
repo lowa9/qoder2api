@@ -287,6 +287,40 @@ access token 并回传新的 refresh_token）在过期前**主动续期**。
 `isQueued=true` 一律判为 `upstream_queued`（不换号、进入同账号等待）。
 
 **回归测试**：`TestParseUpstreamNestedErrorCallCountLimit` / `TestFriendlyUpstreamError_CallCountLimitQueued`。
+### 🔄 修复：闲置后账号全部冷却 30 分钟（会话过期自愈）（2026-10-29）
+
+**2026-10-29 CST** · 本地特性（`local/org-resource-package` 分支）
+
+**现象**：一段时间不用后第一次请求，账号池里所有账号同时进入 30 分钟冷却。
+
+**根因**：上游会话 token（`jobToken` 返回的 `securityOauthToken`）有效期实测为
+**24 小时**（响应字段 `expireTime`）。bridge 启动时为每个账号交换一次会话并缓存在
+内存中，之后从不续期；所有账号的会话在同一时刻建立，因此也会在**同一时刻集体过期**。
+闲置超过 24h 后的第一个请求会依次撞上全部账号，每个都返回
+`403 {"code":"105","message":"Login expired"}`，而 `CooldownFor` 把 401/403 统一
+映射为 30 分钟冷却，于是一次请求把整池冷却；冷却到期后会话依旧是过期的，
+下次请求再次全部冷却，直到重启服务。
+
+**修复**：
+
+| 机制 | 说明 |
+|------|------|
+| **到期前主动续期** | 解析 `expireTime` 存入 `SessionContext.ExpiresAt`；选号时若距到期 ≤2h（或已过期），自动重新 `jobToken` 交换并替换 Slot 的会话与客户端 |
+| **105 原地重试** | 请求若仍返回 `403 code 105`，先重新交换凭证、在同一账号重试一次；成功则不冷却、不换号 |
+| **最小重试间隔** | 每账号 10 分钟内最多尝试一次续期，避免失败时反复打上游 |
+
+| 文件 | 内容 |
+|------|------|
+| `internal/cosy/session.go` | `SessionContext.ExpiresAt` |
+| `internal/bridge/bridge.go` | 解析 `expireTime`；`ensureSlotFresh` / `refreshSlotSession`；105 重试 |
+| `internal/bridge/pool.go` | Slot 保存原始凭证与指纹；会话快照/替换；续期间隔保护；`isLoginExpired` |
+| `internal/bridge/bridge_pool.go` | 构造 Slot 时保存 secret/fp；选号后确保会话新鲜 |
+| `internal/bridge/session_refresh_test.go`（新增） | 105 分类、换 token 后重试成功、到期前续期与间隔保护 |
+
+> 运维提示：旧版本遗留的 `pool_state_cn.json` 里可能还带着冷却记录；升级后若仍显示
+> 冷却，删除该文件并重启即可（仅含冷却元数据，不含凭证）。实测会话 TTL 24h，
+> 主动续期会在到期前 2h 自动进行。
+
 ### 💾 调用日志持久化 + 清空 + 积分面板置顶（2026-10-28）
 
 **2026-10-28 CST** · 本地特性（`local/org-resource-package` 分支）

@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"fmt"
 	"time"
 
 	"qoder2api/account"
@@ -19,7 +20,10 @@ func NewSlotFromSecretWithFP(id, name string, region account.Region, secret stri
 	if err != nil {
 		return nil, err
 	}
-	return NewSlot(id, name, region, b.sess, b.client), nil
+	slot := NewSlot(id, name, region, b.sess, b.client)
+	slot.secret = secret
+	slot.fp = fp
+	return slot, nil
 }
 
 // NewPoolBridge 用账号池创建桥接（多账号轮询 + 失败换号）。
@@ -47,7 +51,11 @@ func (b *Bridge) candidateSlots() []*Slot {
 // pickSlot 选一个账号，跳过 exclude 与冷却中的账号。
 func (b *Bridge) pickSlot(exclude map[string]struct{}) (*Slot, bool) {
 	if b.pool != nil {
-		return b.pool.Pick(exclude)
+		slot, ok := b.pool.Pick(exclude)
+		if ok {
+			b.ensureSlotFresh(slot)
+		}
+		return slot, ok
 	}
 	slots := b.candidateSlots()
 	if len(slots) == 0 {
@@ -56,6 +64,7 @@ func (b *Bridge) pickSlot(exclude map[string]struct{}) (*Slot, bool) {
 	if _, skip := exclude[slots[0].ID]; skip {
 		return nil, false
 	}
+	b.ensureSlotFresh(slots[0])
 	return slots[0], true
 }
 
@@ -102,7 +111,11 @@ func (b *Bridge) ensureCatalog(slot *Slot) {
 }
 
 func (b *Bridge) fetchSlotModels(slot *Slot) ([]QoderModel, error) {
-	resp, err := slot.client.callGet(qoderModelListURL(slot.Region))
+	_, client := slot.snapshot()
+	if client == nil {
+		return nil, fmt.Errorf("slot %s has no client", slot.ID)
+	}
+	resp, err := client.callGet(qoderModelListURL(slot.Region))
 	if err != nil {
 		return nil, err
 	}
@@ -149,8 +162,13 @@ func (b *Bridge) pickSlotForModel(model string, exclude map[string]struct{}) (*S
 		return b.slotSupportsModel(s, model)
 	})
 	if ok {
+		b.ensureSlotFresh(slot)
 		return slot, true
 	}
 	// 池内同 region 账号目录均不含该模型：仍在同 region 内兜底。
-	return b.pool.Pick(exclude, sameRegion)
+	slot, ok = b.pool.Pick(exclude, sameRegion)
+	if ok {
+		b.ensureSlotFresh(slot)
+	}
+	return slot, ok
 }

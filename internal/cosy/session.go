@@ -53,6 +53,9 @@ type SessionContext struct {
 	MachineId    string
 	MachineToken string
 	MachineType  string
+	// ExpiresAt 上游签发的会话过期时间（jobToken 的 expireTime）。
+	// 零值表示上游未提供（如 device token 直接登录路径）。
+	ExpiresAt time.Time
 }
 
 func NewSession(id AuthIdentity, machineId, machineToken, machineType string) (*SessionContext, error) {

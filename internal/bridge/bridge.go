@@ -87,6 +87,8 @@ type Bridge struct {
 	catalogCacheMu sync.Mutex
 	catalogCache   []QoderModel
 	catalogCacheAt time.Time
+	// refreshSlotFn 测试注入用：非空时替代真实的凭证重新交换。
+	refreshSlotFn func(*Slot) error
 }
 
 // QoderModel 是返回给前端的精简模型条目（仅保留下拉选择必要字段）
@@ -148,6 +150,7 @@ func NewBridgeWithFP(pat string, region account.Region, templateBase map[string]
 
 	var identity cosy.AuthIdentity
 	var name, id string
+	var expiresAt time.Time
 
 	deviceToken, refreshToken := ParseOAuthSecret(pat)
 	if strings.HasPrefix(deviceToken, "dt-") {
@@ -177,6 +180,11 @@ func NewBridgeWithFP(pat string, region account.Region, templateBase map[string]
 		}
 		name = StrVal(jt, "name")
 		id = StrVal(jt, "id")
+		// 上游会话 token 有效期（毫秒时间戳）。用于到期前主动续期，
+		// 避免闲置超过有效期后首个请求全部 403 Login expired。
+		if ms := cosy.FloatVal(jt, "expireTime"); ms > 0 {
+			expiresAt = time.UnixMilli(int64(ms))
+		}
 		identity = cosy.AuthIdentity{
 			Name:               name,
 			Aid:                id,
@@ -198,6 +206,7 @@ func NewBridgeWithFP(pat string, region account.Region, templateBase map[string]
 	if err != nil {
 		return nil, err
 	}
+	sess.ExpiresAt = expiresAt
 	var client *BearerClient
 	if fp != nil && fp.MachineToken != "" {
 		// 真实指纹：走新版协议；COSY 会话本身仍用派生身份签名
@@ -223,7 +232,11 @@ func (b *Bridge) ListAvailableModels() ([]QoderModel, error) {
 		return nil, ErrNoAccount
 	}
 	modelListURL := qoderModelListURL(slot.Region)
-	resp, err := slot.client.callGet(modelListURL)
+	_, client := slot.snapshot()
+	if client == nil {
+		return nil, fmt.Errorf("slot %s has no client", slot.ID)
+	}
+	resp, err := client.callGet(modelListURL)
 	if err != nil {
 		return nil, err
 	}
@@ -366,6 +379,59 @@ func DeepCopyMap(m map[string]interface{}) map[string]interface{} {
 	return out
 }
 
+// sessionRefreshWindow 在会话到期前多久主动续期（上游 TTL 实测 24h）。
+const sessionRefreshWindow = 2 * time.Hour
+
+// refreshSlotSession 用账号原始凭证重新交换会话并替换 Slot 内的 sess/client。
+func (b *Bridge) refreshSlotSession(slot *Slot) error {
+	if b.refreshSlotFn != nil {
+		return b.refreshSlotFn(slot)
+	}
+	if slot.secret == "" {
+		return fmt.Errorf("account %s has no credential to refresh", slot.ID)
+	}
+	nb, err := NewBridgeWithFP(slot.secret, slot.Region, nil, slot.fp)
+	if err != nil {
+		return err
+	}
+	slot.replaceSession(nb.sess, nb.client)
+	logger.Info("session refreshed for %s (%s), expires at %s",
+		slot.Name, slot.ID, nb.sess.ExpiresAt.Format(time.RFC3339))
+	return nil
+}
+
+// refreshSessionOnce 串行化续期：并发请求同时发现过期时只交换一次，
+// 其余请求在拿到锁后发现会话已被刷新，直接复用。
+// 距上次失败尝试 10 分钟内不再重试，避免反复打上游。
+func (b *Bridge) refreshSessionOnce(slot *Slot) error {
+	slot.refreshMu.Lock()
+	defer slot.refreshMu.Unlock()
+	if sess, _ := slot.snapshot(); sess != nil && !sess.ExpiresAt.IsZero() &&
+		time.Until(sess.ExpiresAt) > sessionRefreshWindow {
+		return nil // 已被其他请求续期
+	}
+	if time.Since(slot.lastRefreshAttempt) < 10*time.Minute {
+		return fmt.Errorf("session refresh attempted recently")
+	}
+	slot.lastRefreshAttempt = time.Now()
+	return b.refreshSlotSession(slot)
+}
+
+// ensureSlotFresh 在会话临近/已经过期时主动续期，避免闲置超过 TTL 后
+// 首个请求全部 403 Login expired。失败不阻断请求（由 105 重试兜底）。
+func (b *Bridge) ensureSlotFresh(slot *Slot) {
+	sess, _ := slot.snapshot()
+	if sess == nil || sess.ExpiresAt.IsZero() {
+		return
+	}
+	if time.Until(sess.ExpiresAt) > sessionRefreshWindow {
+		return
+	}
+	if err := b.refreshSessionOnce(slot); err != nil {
+		logger.Error("session refresh failed for %s (%s): %v", slot.Name, slot.ID, err)
+	}
+}
+
 // CallOpts 控制单次 CallQoder 的可选行为。
 type CallOpts struct {
 	IsReasoning bool // 是否启用推理模式（对应上游 model_config.is_reasoning）
@@ -489,7 +555,11 @@ func (b *Bridge) fetchCatalogModels() ([]QoderModel, error) {
 		if !slot.available(time.Now()) {
 			continue
 		}
-		resp, err := slot.client.callGet(qoderModelListURL(slot.Region))
+		_, client := slot.snapshot()
+		if client == nil {
+			continue
+		}
+		resp, err := client.callGet(qoderModelListURL(slot.Region))
 		if err != nil {
 			continue
 		}
@@ -713,7 +783,9 @@ func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages [
 		body["chat_record_id"] = nid
 		body["request_set_id"] = cosy.NewUUID()
 		body["session_id"] = cosy.NewUUID()
-		body["aliyun_user_type"] = slot.sess.Identity.UserType
+		if sess, _ := slot.snapshot(); sess != nil {
+			body["aliyun_user_type"] = sess.Identity.UserType
+		}
 		if biz, ok := body["business"].(map[string]interface{}); ok {
 			biz["id"] = cosy.NewUUID()
 			biz["begin_at"] = cosy.UnixMs()
@@ -726,6 +798,19 @@ func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages [
 		logger.Debug("callQoder request body: %s", func() string { d, _ := json.Marshal(body); return string(d) }())
 
 		emitted, err := b.streamWithSlot(ctx, slot, qurl, body, extra, onDelta)
+		// 会话过期（403 code 105）：先重新交换凭证并原地重试一次，
+		// 成功则无需冷却/换号；仍失败才走正常失败处理。
+		if err != nil && !emitted && isLoginExpired(err) {
+			if rerr := b.refreshSessionOnce(slot); rerr == nil {
+				if sess, _ := slot.snapshot(); sess != nil {
+					body["aliyun_user_type"] = sess.Identity.UserType
+				}
+				logger.Info("Login expired on %s, retrying once after session refresh", slot.Name)
+				emitted, err = b.streamWithSlot(ctx, slot, qurl, body, extra, onDelta)
+			} else {
+				logger.Error("session refresh after Login expired failed for %s: %v", slot.Name, rerr)
+			}
+		}
 		if err == nil {
 			b.noteSlotSuccess(slot.ID)
 			return nil
@@ -825,7 +910,11 @@ func (b *Bridge) streamWithTransientRetry(ctx context.Context, slot *Slot, qurl 
 			}
 			onDelta(d)
 		}
-		streamErr := slot.client.openStreamLines(ctx, qurl, body, extra,
+		_, client := slot.snapshot()
+		if client == nil {
+			return emittedAny, fmt.Errorf("slot %s has no client", slot.ID)
+		}
+		streamErr := client.openStreamLines(ctx, qurl, body, extra,
 			deltaDispatcher(onDeltaWrapped, &upstreamErr))
 		if upstreamErr == nil && streamErr == nil {
 			// 上游正常关流但未发出任何有效 delta/usage 帧：对齐 hub
