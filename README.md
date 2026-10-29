@@ -1281,6 +1281,28 @@ sudo systemctl enable --now qoder2api
 
 ---
 
+## 维护：同步上游
+
+本仓库以 fork 形式维护：
+
+| remote | 用途 |
+|--------|------|
+| `origin` | 作者仓库（上游），只读 |
+| `lowa9` | 自己的 fork；`main` 保持与上游一致，不直接提交 |
+| `local/org-resource-package` | 本地开发分支，包含全部本地特性 |
+
+上游有新提交时：
+
+```bash
+./scripts/sync-upstream.sh            # 同步 fork main → rebase 本地分支 → build/test
+./scripts/sync-upstream.sh --deploy   # 额外构建并重启本机服务
+```
+
+遇到 rebase 冲突：解决冲突 → `git rebase --continue` → 重新执行脚本。
+同步后如需备份到 GitHub：`git push lowa9 local/org-resource-package`。
+
+---
+
 ## 项目结构
 
 ```text
