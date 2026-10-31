@@ -76,6 +76,9 @@ type CallMeta struct {
 	// StartedAt 客户端请求进入 handler 的时间，用于计算首字延迟（TTFT）。
 	// 零值时回退到 CallQoder 入口时间。
 	StartedAt time.Time
+	// SessionKey 客户端会话标识（metadata/conversation id 或消息前缀哈希）。
+	// 用于会话级账号粘性：新会话随机选号，同会话后续复用同一账号。
+	SessionKey string
 }
 
 type callMetaKey struct{}

@@ -242,6 +242,8 @@ func TestCooldownForRetryAfterSeconds(t *testing.T) {
 }
 
 func TestPickSlotForModelRoutesByRegion(t *testing.T) {
+	SetStickyPool(false)
+	t.Cleanup(func() { SetStickyPool(true) })
 	cn := testSlot(t, "cn-slot", "t")
 	cn.catalog = map[string]bool{"gmodel": true, "qfmodel": true}
 	cn.catalogAt = time.Now()
@@ -253,11 +255,11 @@ func TestPickSlotForModelRoutesByRegion(t *testing.T) {
 
 	// 区域独占模型 → 必须落到能提供它的区域
 	for i := 0; i < 3; i++ {
-		s, ok := br.pickSlotForModel("gmodel", nil)
+		s, ok := br.pickSlotForModel("gmodel", nil, "")
 		if !ok || s.ID != "cn-slot" {
 			t.Fatalf("gmodel should route to cn-slot, got %v", s)
 		}
-		s, ok = br.pickSlotForModel("ultimate", nil)
+		s, ok = br.pickSlotForModel("ultimate", nil, "")
 		if !ok || s.ID != "global-slot" {
 			t.Fatalf("ultimate should route to global-slot, got %v", s)
 		}
@@ -266,7 +268,7 @@ func TestPickSlotForModelRoutesByRegion(t *testing.T) {
 	// 两区都有的模型 → 轮询两区
 	seen := map[string]bool{}
 	for i := 0; i < 4; i++ {
-		if s, ok := br.pickSlotForModel("qfmodel", nil); ok {
+		if s, ok := br.pickSlotForModel("qfmodel", nil, ""); ok {
 			seen[s.ID] = true
 		}
 	}
@@ -275,7 +277,7 @@ func TestPickSlotForModelRoutesByRegion(t *testing.T) {
 	}
 
 	// 谁都不认识的模型 → 兜底任意可用账号
-	if s, ok := br.pickSlotForModel("nobody-has-this", nil); !ok || s == nil {
+	if s, ok := br.pickSlotForModel("nobody-has-this", nil, ""); !ok || s == nil {
 		t.Fatalf("unknown model should fall back to any slot, got %v", s)
 	}
 }

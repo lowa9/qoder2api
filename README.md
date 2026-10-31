@@ -272,6 +272,28 @@ access token 并回传新的 refresh_token）在过期前**主动续期**。
 
 ## 更新记录
 
+### 🧵 会话级粘性选号（2026-10-29）
+
+**2026-10-29 CST** · 本地特性（`local/org-resource-package` 分支）
+
+此前粘性是**全局**的：所有会话共享同一个"上次成功账号"，第二个 Claude 会话
+第一次请求也会落到同一账号。现在改为**按会话绑定**：
+
+- **新会话首次请求随机选号**，多个会话自然分散到不同账号；
+- **同一会话后续请求复用该账号**，前缀缓存保持热；
+- 会话识别优先级：`conversation_id` / `conversationId` / `session_id` →
+  Anthropic `metadata.user_id` → **首条 system + user 消息的哈希**（后续轮次不变）；
+- 绑定闲置 **2 小时**过期，最多保留 **1024** 条，超限淘汰最久未使用；
+- 账号冷却/不支持目标模型时重新选号，成功后更新该会话的绑定；
+- 关闭「粘性选号」时退化为纯轮询（忽略会话绑定）。
+
+| 文件 | 内容 |
+|------|------|
+| `internal/bridge/pool.go` | `sessionBinding` / `PickWithSession` / `NoteSessionSuccess`（含 TTL 与容量淘汰）|
+| `internal/bridge/bridge.go` | `sessionKeyFromBody` / `deriveSessionKey`；选号与成功回写绑定 |
+| `internal/bridge/{chat,claude,codex}.go` | 从请求注入会话标识 |
+| `internal/bridge/session_affinity_test.go`（新增） | 会话键稳定性、请求提取、两会话分散与粘性、冷却后重绑 |
+
 ### 🎲 冷启动随机选号（2026-10-29）
 
 **2026-10-29 CST** · 本地特性（`local/org-resource-package` 分支）

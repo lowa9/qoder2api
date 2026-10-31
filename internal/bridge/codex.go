@@ -47,7 +47,7 @@ func (b *Bridge) HandleCodexResponses(w http.ResponseWriter, r *http.Request) {
 	logger.Info("[Codex][%s] model=%s stream=%v tools=%v msgs=%d", reqID, model, stream, toolsEnabled, len(incomingMsgs))
 
 	respId := "resp_" + cosy.NewRequestID()
-	ctx := WithCallMeta(r.Context(), CallMeta{RequestID: reqID, Protocol: "codex", Stream: stream, StartedAt: startTime})
+	ctx := WithCallMeta(r.Context(), CallMeta{RequestID: reqID, Protocol: "codex", Stream: stream, StartedAt: startTime, SessionKey: sessionKeyFromBody(req)})
 
 	if stream {
 		w.Header().Set("Content-Type", "text/event-stream")

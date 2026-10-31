@@ -128,9 +128,25 @@ type Pool struct {
 	mu          sync.Mutex
 	slots       []*Slot
 	cursor      int
-	lastSuccess string // 最近一次成功调用使用的账号 id（粘性选号优先复用）
-	statePath   string // 非空时把冷却状态持久化到该文件（重启不丢）
+	lastSuccess string // 最近一次成功调用使用的账号 id（全局粘性，无会话标识时使用）
+	// sessions 会话 -> 账号绑定。新会话随机选号，同一会话后续复用，
+	// 使多个客户端会话各自落在不同账号上并保持缓存热度。
+	sessions  map[string]sessionBinding
+	statePath string // 非空时把冷却状态持久化到该文件（重启不丢）
 }
+
+// sessionBinding 一个会话当前绑定的账号。
+type sessionBinding struct {
+	accountID string
+	seen      time.Time
+}
+
+const (
+	// sessionBindingTTL 会话绑定的闲置有效期；超过后视为新会话重新随机。
+	sessionBindingTTL = 2 * time.Hour
+	// maxSessionBindings 绑定表上限，超出时淘汰最久未使用的条目。
+	maxSessionBindings = 1024
+)
 
 func NewPool(slots ...*Slot) *Pool { return &Pool{slots: slots} }
 
@@ -251,7 +267,20 @@ func (p *Pool) snapshot() []*Slot {
 
 // Pick 从轮询游标开始扫描，返回第一个「未冷却、不在 exclude 中、且满足
 // 可选 filter」的账号。filter 在锁外调用（允许其中做缓存/网络操作）。
+// Pick 无会话标识的选号（模型目录、控制台等场景沿用全局粘性）。
 func (p *Pool) Pick(exclude map[string]struct{}, filters ...func(*Slot) bool) (*Slot, bool) {
+	return p.pick("", exclude, filters...)
+}
+
+// PickWithSession 会话感知选号：
+//   - 该会话已有绑定且账号可用 → 复用（缓存热）
+//   - 新会话/绑定失效 → 随机起点（多个会话分散到不同账号）
+//   - 会话为空时退化为原有全局粘性 + 冷启动随机
+func (p *Pool) PickWithSession(sessionKey string, exclude map[string]struct{}, filters ...func(*Slot) bool) (*Slot, bool) {
+	return p.pick(sessionKey, exclude, filters...)
+}
+
+func (p *Pool) pick(sessionKey string, exclude map[string]struct{}, filters ...func(*Slot) bool) (*Slot, bool) {
 	if p == nil {
 		return nil, false
 	}
@@ -264,31 +293,59 @@ func (p *Pool) Pick(exclude map[string]struct{}, filters ...func(*Slot) bool) (*
 	if n == 0 {
 		return nil, false
 	}
+	now := time.Now()
+
 	p.mu.Lock()
 	start := p.cursor
 	stickyID := p.lastSuccess
+	sessionAcc := ""
+	if sessionKey != "" && stickyEnabled.Load() {
+		if b, ok := p.sessions[sessionKey]; ok && now.Sub(b.seen) < sessionBindingTTL {
+			sessionAcc = b.accountID
+		}
+	}
 	p.mu.Unlock()
-	now := time.Now()
-
-	// 冷启动（还没有成功账号，如进程刚启动）：随机起点，
-	// 避免每次重启都把全部流量压到池里第一个账号。
-	if stickyID == "" && poolRandIndex != nil {
-		start = poolRandIndex(n)
+	// 关闭粘性时退化为纯轮询：忽略会话绑定与随机起点
+	if !stickyEnabled.Load() {
+		sessionKey = ""
+		sessionAcc = ""
 	}
 
-	// 粘性：优先复用上次成功账号（未被排除、未冷却、满足 filter）。
-	// 不推进 cursor——粘性失效时轮询从原位置继续，保持换号顺序稳定。
-	if stickyEnabled.Load() && stickyID != "" {
-		if _, skip := exclude[stickyID]; !skip {
-			for _, s := range slots {
-				if s.ID != stickyID || !s.available(now) {
-					continue
-				}
-				if filter != nil && !filter(s) {
-					break
-				}
-				return s, true
+	usable := func(id string) *Slot {
+		if id == "" {
+			return nil
+		}
+		if _, skip := exclude[id]; skip {
+			return nil
+		}
+		for _, s := range slots {
+			if s.ID != id || !s.available(now) {
+				continue
 			}
+			if filter != nil && !filter(s) {
+				return nil
+			}
+			return s
+		}
+		return nil
+	}
+
+	// 1) 会话绑定优先
+	if s := usable(sessionAcc); s != nil {
+		return s, true
+	}
+	// 2) 无会话标识时才使用全局粘性（新会话应随机分散）
+	if sessionKey == "" && stickyEnabled.Load() {
+		if s := usable(stickyID); s != nil {
+			return s, true
+		}
+	}
+	// 3) 新会话 / 粘性冷启动：随机起点（关闭粘性时保持纯轮询）
+	if poolRandIndex != nil {
+		if sessionKey != "" && sessionAcc == "" {
+			start = poolRandIndex(n)
+		} else if sessionKey == "" && stickyID == "" && stickyEnabled.Load() {
+			start = poolRandIndex(n)
 		}
 	}
 
@@ -321,6 +378,43 @@ func (p *Pool) Cool(id string, d time.Duration, reason string) {
 			p.save()
 			return
 		}
+	}
+}
+
+// NoteSessionSuccess 记录会话与账号的绑定，后续同会话优先复用该账号。
+func (p *Pool) NoteSessionSuccess(sessionKey, id string) {
+	if p == nil || sessionKey == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.sessions == nil {
+		p.sessions = map[string]sessionBinding{}
+	}
+	now := time.Now()
+	p.sessions[sessionKey] = sessionBinding{accountID: id, seen: now}
+	if len(p.sessions) > maxSessionBindings {
+		p.pruneSessionsLocked(now)
+	}
+}
+
+// pruneSessionsLocked 清理过期绑定；仍超限时反复淘汰最久未使用项。
+// 调用方必须持有 p.mu。
+func (p *Pool) pruneSessionsLocked(now time.Time) {
+	for k, b := range p.sessions {
+		if now.Sub(b.seen) >= sessionBindingTTL {
+			delete(p.sessions, k)
+		}
+	}
+	for len(p.sessions) > maxSessionBindings {
+		oldestKey := ""
+		var oldest time.Time
+		for k, b := range p.sessions {
+			if oldestKey == "" || b.seen.Before(oldest) {
+				oldestKey, oldest = k, b.seen
+			}
+		}
+		delete(p.sessions, oldestKey)
 	}
 }
 

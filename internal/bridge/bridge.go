@@ -2,6 +2,8 @@ package bridge
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -570,6 +572,76 @@ func (b *Bridge) fetchCatalogModels() ([]QoderModel, error) {
 	return nil, fmt.Errorf("no available slot for model catalog")
 }
 
+// sessionKeyFromBody 提取客户端显式会话标识（优先 conversation/session，
+// 其次 Anthropic metadata.user_id）。缺失时由 deriveSessionKey 用消息前缀兜底。
+func sessionKeyFromBody(req map[string]interface{}) string {
+	for _, k := range []string{"conversation_id", "conversationId", "session_id"} {
+		if v, ok := req[k].(string); ok {
+			if v = strings.TrimSpace(v); v != "" {
+				return "conv:" + v
+			}
+		}
+	}
+	if md, ok := req["metadata"].(map[string]interface{}); ok {
+		for _, k := range []string{"user_id", "conversation_id", "session_id"} {
+			if v, ok := md[k].(string); ok {
+				if v = strings.TrimSpace(v); v != "" {
+					return "meta:" + v
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// deriveSessionKey 从消息前缀派生会话标识：同一会话的后续轮次
+// system + 首条 user 保持不变，因此键稳定；不同会话通常得到不同键。
+func deriveSessionKey(messages []interface{}) string {
+	var sys, firstUser string
+	for _, it := range messages {
+		m, ok := it.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		switch role, _ := m["role"].(string); role {
+		case "system":
+			if sys == "" {
+				sys = NormalizeMessageContent(m)
+			}
+		case "user":
+			firstUser = NormalizeMessageContent(m)
+			if firstUser == "" {
+				if contents, ok := m["contents"].([]interface{}); ok {
+					for _, b := range contents {
+						if bm, ok := b.(map[string]interface{}); ok {
+							if t, ok := bm["text"].(string); ok && t != "" {
+								firstUser = t
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+		if firstUser != "" {
+			break
+		}
+	}
+	if firstUser == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(sys + "\x00" + firstUser))
+	return "msg:" + hex.EncodeToString(sum[:8])
+}
+
+// shortSession 日志展示用：只保留前缀。
+func shortSession(s string) string {
+	if len(s) > 18 {
+		return s[:18]
+	}
+	return s
+}
+
 func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages []interface{}, model string, tools interface{}, opts CallOpts, onDelta func(Delta)) (err error) {
 	// 将客户端模型名（claude-sonnet-4-6 等）映射成 Qoder 上游内部 model.key（auto/qmodel_38max/gmodel/dmodel 等）。
 	// 上游对未知 key 会走兜底返回内容，但不会把这次调用计入 quota，这是「请求成功但 dashboard 无用量」的根因。
@@ -584,6 +656,10 @@ func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages [
 	// 与 logger 原始行日志并存：这里按字段拆分，便于可读渲染，不改变原有日志。
 	startedAt := time.Now()
 	meta := callMetaFrom(ctx)
+	sessionKey := meta.SessionKey
+	if sessionKey == "" {
+		sessionKey = deriveSessionKey(messages)
+	}
 	rec := CallRecord{
 		Time:          startedAt,
 		RequestID:     meta.RequestID,
@@ -792,14 +868,14 @@ func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages [
 	tried := make(map[string]struct{})
 	var lastErr error
 	for {
-		slot, ok := b.pickSlotForModel(model, tried)
+		slot, ok := b.pickSlotForModel(model, tried, sessionKey)
 		if !ok {
 			break
 		}
 		// 记录本次实际使用的账号（含 region），便于对账与排查
 		// 「请求是否路由到了未启动的那一侧账号」类问题。
-		logger.Info("callQoder: using account=%s id=%s region=%s model=%s",
-			slot.Name, slot.ID, slot.Region, model)
+		logger.Info("callQoder: using account=%s id=%s region=%s model=%s session=%s",
+			slot.Name, slot.ID, slot.Region, model, shortSession(sessionKey))
 		// 调用日志：以「最后一次尝试」的账号为准（成功即实际使用账号；
 		// 全部失败时即最后撞上的账号），Attempts 反映是否发生换号。
 		rec.Attempts++
@@ -841,7 +917,7 @@ func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages [
 			}
 		}
 		if err == nil {
-			b.noteSlotSuccess(slot.ID)
+			b.noteSlotSuccess(slot.ID, sessionKey)
 			return nil
 		}
 		lastErr = err
