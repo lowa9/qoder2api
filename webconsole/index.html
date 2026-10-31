@@ -342,7 +342,8 @@ pre {
         <span class="msg" id="stickyMsg"></span>
       </div>
       <div class="muted" style="margin-top:8px">
-        开启后同一账号持续服务，上游前缀缓存更易命中（实测命中时 credits 约为未命中的 1/12~1/25）。
+        首次请求（进程刚启动、还没有成功账号时）会从可用账号中随机选择，之后粘住该账号持续服务，
+        上游前缀缓存更易命中（实测命中时 credits 约为未命中的 1/12~1/25）。
         账号失败或冷却时仍会自动换号，不影响可用性。
       </div>
     </section>

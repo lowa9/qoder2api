@@ -30,15 +30,15 @@ func testSlot(t *testing.T, id, userType string) *Slot {
 func TestPoolPickSkipsCooling(t *testing.T) {
 	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
 	s1, ok := p.Pick(nil)
-	if !ok || s1.ID != "a" {
-		t.Fatalf("first pick = %v", s1)
+	if !ok {
+		t.Fatal("first pick failed")
 	}
-	p.Cool("a", time.Minute, "quota")
+	p.Cool(s1.ID, time.Minute, "quota")
 	s2, ok := p.Pick(nil)
-	if !ok || s2.ID != "b" {
-		t.Fatalf("after cooling a, pick = %v", s2)
+	if !ok || s2.ID == s1.ID {
+		t.Fatalf("after cooling %s, pick = %v, want the other account", s1.ID, s2)
 	}
-	p.Cool("b", time.Minute, "quota")
+	p.Cool(s2.ID, time.Minute, "quota")
 	if _, ok := p.Pick(nil); ok {
 		t.Fatal("expected no available account when all cooling")
 	}
@@ -155,11 +155,21 @@ func TestCallQoderFailsOverToNextAccount(t *testing.T) {
 	if len(got) != 1 || got[0] != "ok" {
 		t.Fatalf("deltas = %v", got)
 	}
-	if len(userTypes) != 2 || userTypes[0] != "type_a" || userTypes[1] != "type_b" {
-		t.Fatalf("expected failover a->b, userTypes=%v", userTypes)
+	// 冷启动起点随机，先撞哪个账号都可能；只要求两个账号都试过且顺序可辨
+	if len(userTypes) != 2 {
+		t.Fatalf("userTypes = %v, want two attempts", userTypes)
 	}
-	if _, ok := pool.Pick(map[string]struct{}{"b": {}}); ok {
-		t.Fatal("account a should be cooling after 403")
+	a2b := userTypes[0] == "type_a" && userTypes[1] == "type_b"
+	b2a := userTypes[0] == "type_b" && userTypes[1] == "type_a"
+	if !a2b && !b2a {
+		t.Fatalf("expected failover between a and b, userTypes=%v", userTypes)
+	}
+	successID := userTypes[1][len("type_"):]
+	if s, ok := pool.Pick(nil); !ok || s.ID != successID {
+		t.Fatalf("pick = %v, want successful account %s", s, successID)
+	}
+	if _, ok := pool.Pick(map[string]struct{}{successID: {}}); ok {
+		t.Fatal("the failed account should be cooling after 403")
 	}
 }
 
@@ -277,22 +287,23 @@ func TestPoolStickyRouting(t *testing.T) {
 	t.Cleanup(func() { SetStickyPool(true) })
 
 	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
+	// 冷启动起点是随机的，先取到哪个就粘哪个
 	first, ok := p.Pick(nil)
-	if !ok || first.ID != "a" {
-		t.Fatalf("first pick = %v, want a", first)
+	if !ok {
+		t.Fatal("first pick failed")
 	}
-	p.NoteSuccess("a")
-	// 轮询本应给 b，粘性应持续返回 a
+	p.NoteSuccess(first.ID)
+	// 轮询本应换号，粘性应持续返回同一账号
 	for i := 0; i < 3; i++ {
 		s, ok := p.Pick(nil)
-		if !ok || s.ID != "a" {
-			t.Fatalf("sticky pick #%d = %v, want a", i, s)
+		if !ok || s.ID != first.ID {
+			t.Fatalf("sticky pick #%d = %v, want %s", i, s, first.ID)
 		}
 	}
-	// a 冷却 → 回落 b
-	p.Cool("a", time.Minute, "test")
-	if s, ok := p.Pick(nil); !ok || s.ID != "b" {
-		t.Fatalf("after cooling a, pick = %v, want b", s)
+	// 该账号冷却 → 回落另一个
+	p.Cool(first.ID, time.Minute, "test")
+	if s, ok := p.Pick(nil); !ok || s.ID == first.ID {
+		t.Fatalf("after cooling %s, pick = %v, want the other account", first.ID, s)
 	}
 
 	// 关闭粘性：新池严格轮询
@@ -304,5 +315,26 @@ func TestPoolStickyRouting(t *testing.T) {
 	}
 	if s, _ := p2.Pick(nil); s.ID != "d" {
 		t.Fatalf("second pick = %v, want d (rotation, sticky off)", s)
+	}
+}
+
+// TestPoolColdStartRandomPick 验证冷启动（尚无成功账号）时随机起点，
+// 不再是永远第一个；选定并成功后会粘住该账号。
+func TestPoolColdStartRandomPick(t *testing.T) {
+	oldRand := poolRandIndex
+	poolRandIndex = func(n int) int { return 2 }
+	t.Cleanup(func() { poolRandIndex = oldRand })
+	SetStickyPool(true)
+	t.Cleanup(func() { SetStickyPool(true) })
+
+	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"), testSlot(t, "c", "t"), testSlot(t, "d", "t"))
+	s, ok := p.Pick(nil)
+	if !ok || s.ID != "c" {
+		t.Fatalf("cold start pick = %v, want c (random index 2)", s)
+	}
+	p.NoteSuccess("c")
+	// 已有成功账号：粘性复用，不再随机
+	if s2, _ := p.Pick(nil); s2.ID != "c" {
+		t.Fatalf("sticky pick = %v, want c", s2)
 	}
 }

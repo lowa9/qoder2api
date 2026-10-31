@@ -3,6 +3,7 @@ package bridge
 import (
 	"encoding/json"
 	"errors"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"strconv"
@@ -29,6 +30,9 @@ var ErrNoAccount = errors.New("no available account in pool")
 // 严格轮询会让每个账号各自冷启动一次；粘性选号让同一账号持续服务，
 // 低频场景下可显著减少全价调用。失败/冷却时仍走正常换号逻辑。
 var stickyEnabled atomic.Bool
+
+// poolRandIndex 冷启动时的随机起点；测试可替换。
+var poolRandIndex = rand.IntN
 
 func init() { stickyEnabled.Store(true) }
 
@@ -265,6 +269,12 @@ func (p *Pool) Pick(exclude map[string]struct{}, filters ...func(*Slot) bool) (*
 	stickyID := p.lastSuccess
 	p.mu.Unlock()
 	now := time.Now()
+
+	// 冷启动（还没有成功账号，如进程刚启动）：随机起点，
+	// 避免每次重启都把全部流量压到池里第一个账号。
+	if stickyID == "" && poolRandIndex != nil {
+		start = poolRandIndex(n)
+	}
 
 	// 粘性：优先复用上次成功账号（未被排除、未冷却、满足 filter）。
 	// 不推进 cursor——粘性失效时轮询从原位置继续，保持换号顺序稳定。
