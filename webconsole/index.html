@@ -919,7 +919,14 @@ pre {
         const sumCached = rows.reduce((s, r) => s + (r.cached_tokens || 0), 0);
         const sumCredits = rows.reduce((s, r) => s + (r.credits || 0), 0);
         const hit = sumIn > 0 ? (sumCached / sumIn * 100).toFixed(1) : '0.0';
-        return `共 ${callsCache.length} 条，显示 ${rows.length} 条 · 缓存命中 ${hit}%（${fmtNum(sumCached)}/${fmtNum(sumIn)}）· 合计 ${sumCredits.toFixed(4)} credits · 每 20s 刷新`;
+        const ttfts = rows.filter(r => r.ttft_ms > 0);
+        const speeds = rows.filter(r => r.tokens_per_sec > 0);
+        const avgTTFT = ttfts.length ? Math.round(ttfts.reduce((s, r) => s + r.ttft_ms, 0) / ttfts.length) : 0;
+        const avgSpeed = speeds.length ? (speeds.reduce((s, r) => s + r.tokens_per_sec, 0) / speeds.length) : 0;
+        return `共 ${callsCache.length} 条，显示 ${rows.length} 条 · 缓存命中 ${hit}%（${fmtNum(sumCached)}/${fmtNum(sumIn)}）· 合计 ${sumCredits.toFixed(4)} credits` +
+          (avgTTFT ? ` · 平均首字 ${avgTTFT}ms` : '') +
+          (avgSpeed ? ` · 平均 ${avgSpeed.toFixed(1)} t/s` : '') +
+          ' · 每 20s 刷新';
       })();
       if (!rows.length) {
         box.innerHTML = '<span class="muted">暂无调用记录（有客户端请求后，这里会显示每次实际使用的账号与结果）</span>';
@@ -946,6 +953,10 @@ pre {
         const cache = (r.cached_tokens && r.input_tokens)
           ? `${(r.cached_tokens / r.input_tokens * 100).toFixed(1)}% <span class="muted">(${fmtNum(r.cached_tokens)})</span>`
           : '<span class="muted">-</span>';
+        const ttft = (r.ttft_ms > 0)
+          ? `${r.ttft_ms}ms` : '<span class="muted">-</span>';
+        const speed = (r.tokens_per_sec > 0)
+          ? `${r.tokens_per_sec.toFixed(1)} t/s` : '<span class="muted">-</span>';
         const credit = (r.credits != null)
           ? `${r.credits.toFixed(4)}${(r.original_credits && r.original_credits > r.credits) ? ` <span class="muted">原 ${r.original_credits.toFixed(4)}</span>` : ''}`
           : '-';
@@ -969,6 +980,8 @@ pre {
           `<td style="text-align:right;white-space:nowrap">${cache}</td>` +
           `<td style="text-align:right;white-space:nowrap">${credit}</td>` +
           `<td style="text-align:right;white-space:nowrap">${r.duration_ms}ms</td>` +
+          `<td style="text-align:right;white-space:nowrap">${ttft}</td>` +
+          `<td style="text-align:right;white-space:nowrap">${speed}</td>` +
           `<td style="min-width:180px">${preview}${err}</td>` +
           `</tr>`;
       }).join('');
@@ -977,7 +990,8 @@ pre {
         `<th>时间</th><th>状态</th><th>协议</th><th>模型</th><th>账号</th>` +
         `<th>模式</th><th style="text-align:right">Token(入/出)</th>` +
         `<th style="text-align:right">缓存命中</th><th style="text-align:right">Credits</th>` +
-        `<th style="text-align:right">耗时</th><th>请求预览</th></tr></thead>` +
+        `<th style="text-align:right">耗时</th><th style="text-align:right">首字</th>` +
+        `<th style="text-align:right">速度</th><th>请求预览</th></tr></thead>` +
         `<tbody>${body}</tbody></table>`;
     }
 

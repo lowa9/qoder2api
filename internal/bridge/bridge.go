@@ -595,8 +595,30 @@ func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages [
 		Messages:      len(messages),
 		Tools:         tools != nil,
 	}
+	// 首字/末字时间：TTFT 与吐字速率按「有实际输出」的 delta 计算，
+	// usage-only 帧不算首字。
+	ttftBase := meta.StartedAt
+	if ttftBase.IsZero() {
+		ttftBase = startedAt
+	}
+	var firstDeltaAt, lastDeltaAt time.Time
+
 	defer func() {
 		rec.DurationMS = time.Since(startedAt).Milliseconds()
+		if !firstDeltaAt.IsZero() {
+			rec.TTFTMS = firstDeltaAt.Sub(ttftBase).Milliseconds()
+			if rec.TTFTMS < 0 {
+				rec.TTFTMS = 0
+			}
+			if rec.OutputTokens > 0 {
+				gen := lastDeltaAt.Sub(firstDeltaAt)
+				// 窗口过短（单帧返回）时速率没有意义，保持 0 由前端显示 "-"
+				if gen >= 50*time.Millisecond {
+					rec.GenerationMS = gen.Milliseconds()
+					rec.TokensPerSec = float64(rec.OutputTokens) / gen.Seconds()
+				}
+			}
+		}
 		switch {
 		case err == nil:
 			rec.Status = CallStatusOK
@@ -629,6 +651,13 @@ func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages [
 	// 包装 delta 回调：顺带累计 token 用量与工具调用标记（不改动调用方逻辑）。
 	userOnDelta := onDelta
 	onDelta = func(d Delta) {
+		if d.hasOutput() {
+			now := time.Now()
+			if firstDeltaAt.IsZero() {
+				firstDeltaAt = now
+			}
+			lastDeltaAt = now
+		}
 		if d.InputTokens > 0 {
 			rec.InputTokens = d.InputTokens
 		}

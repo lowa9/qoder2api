@@ -46,7 +46,7 @@ func (b *Bridge) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	reqId := "chatcmpl-" + cosy.NewRequestID()
 	created := cosy.UnixSec()
-	ctx := WithCallMeta(r.Context(), CallMeta{RequestID: reqID, Protocol: "chat", Stream: stream})
+	ctx := WithCallMeta(r.Context(), CallMeta{RequestID: reqID, Protocol: "chat", Stream: stream, StartedAt: startTime})
 
 	if stream {
 		w.Header().Set("Content-Type", "text/event-stream")

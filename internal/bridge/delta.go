@@ -29,6 +29,12 @@ type Delta struct {
 	Err             error   // 上游返回业务错误时非 nil
 }
 
+// hasOutput 判断该 delta 是否包含实际输出（内容/推理/工具调用），
+// 用于首字延迟与吐字速率；usage-only 帧不算。
+func (d Delta) hasOutput() bool {
+	return d.Role != "" || d.Content != "" || d.Reasoning != "" || d.ToolCalls != nil
+}
+
 func (d Delta) isEmpty() bool {
 	return d.Role == "" && d.Content == "" && d.Reasoning == "" && d.ToolCalls == nil && d.InputTokens == 0 && d.OutputTokens == 0 && d.Err == nil
 }

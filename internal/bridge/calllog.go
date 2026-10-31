@@ -51,8 +51,14 @@ type CallRecord struct {
 	Credits         float64 `json:"credits"`          // 本次计费 credits
 	OriginalCredits float64 `json:"original_credits"` // 优惠前 credits（不同即命中促销）
 	DurationMS      int64   `json:"duration_ms"`
-	HadToolCalls    bool    `json:"had_tool_calls"` // 上游是否返回了工具调用
-	Emitted         bool    `json:"emitted"`        // 是否向客户端发过内容
+	// TTFTMS 首字延迟：从客户端请求开始到第一个内容/推理/工具 delta。
+	TTFTMS int64 `json:"ttft_ms"`
+	// GenerationMS 生成窗口：首字到最后一个内容 delta。
+	GenerationMS int64 `json:"generation_ms,omitempty"`
+	// TokensPerSec 吐字速率 = completion_tokens / 生成窗口（窗口过短时为 0）。
+	TokensPerSec float64 `json:"tokens_per_sec,omitempty"`
+	HadToolCalls bool    `json:"had_tool_calls"` // 上游是否返回了工具调用
+	Emitted      bool    `json:"emitted"`        // 是否向客户端发过内容
 }
 
 // 调用结果枚举
@@ -67,6 +73,9 @@ type CallMeta struct {
 	RequestID string
 	Protocol  string // chat | claude | codex
 	Stream    bool
+	// StartedAt 客户端请求进入 handler 的时间，用于计算首字延迟（TTFT）。
+	// 零值时回退到 CallQoder 入口时间。
+	StartedAt time.Time
 }
 
 type callMetaKey struct{}

@@ -287,6 +287,33 @@ access token 并回传新的 refresh_token）在过期前**主动续期**。
 `isQueued=true` 一律判为 `upstream_queued`（不换号、进入同账号等待）。
 
 **回归测试**：`TestParseUpstreamNestedErrorCallCountLimit` / `TestFriendlyUpstreamError_CallCountLimitQueued`。
+### ⚡ 新增：首字延迟（TTFT）与吐字速率（t/s）（2026-10-29）
+
+**2026-10-29 CST** · 本地特性（`local/org-resource-package` 分支）
+
+模型调用日志新增两列：
+
+| 指标 | 计算方式 |
+|------|----------|
+| **首字延迟**（TTFT） | 客户端请求进入 handler → 第一个内容/推理/工具 delta 的时间 |
+| **速度**（t/s） | `completion_tokens ÷ (最后一个内容 delta − 第一个内容 delta)` |
+
+细节：
+
+- 起点使用 handler 入口时间（`CallMeta.StartedAt`），包含排队、选号、换号与上游首包时间；
+- usage-only 帧不算首字；只发了一帧或生成窗口 <50ms 时不计算速度（显示 `-`），避免单帧返回产生虚假高值；
+- 非流式客户端同样有效：bridge 对上游始终走 SSE，只是最后聚合返回；
+- 调用日志顶部汇总新增「平均首字 / 平均 t/s」。
+
+| 文件 | 内容 |
+|------|------|
+| `internal/bridge/calllog.go` | `CallMeta.StartedAt`；`CallRecord.TTFTMS` / `GenerationMS` / `TokensPerSec` |
+| `internal/bridge/bridge.go` | 跟踪首字/末字时间，defer 中计算指标 |
+| `internal/bridge/delta.go` | `hasOutput()`：区分实际输出与 usage-only 帧 |
+| `internal/bridge/{chat,claude,codex}.go` | 注入 handler 入口时间 |
+| `webconsole/index.html` | 首字 / 速度两列 + 平均值汇总 |
+| `internal/bridge/calllog_test.go` | 80ms 分帧场景验证 TTFT、生成窗口与速率 |
+
 ### 🔄 修复：闲置后账号全部冷却 30 分钟（会话过期自愈）（2026-10-29）
 
 **2026-10-29 CST** · 本地特性（`local/org-resource-package` 分支）

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"qoder2api/account"
 )
@@ -211,5 +212,48 @@ func TestCallLogPersistsAndClears(t *testing.T) {
 	l3.record(CallRecord{Protocol: "chat", Model: "auto"})
 	if got := l3.snapshot(0); len(got) != 1 || got[0].Seq != 1 {
 		t.Fatalf("after clear record = %+v", got)
+	}
+}
+
+// TestCallLogTTFTAndSpeed 验证首字延迟与吐字速率：
+// 第一帧内容后停顿 80ms 再返回 usage，生成窗口应≥50ms 且速率可计算。
+func TestCallLogTTFTAndSpeed(t *testing.T) {
+	account.SetDataRoot(t.TempDir())
+	ClearCalls()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		fmt.Fprint(w, sseContent("a"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		time.Sleep(80 * time.Millisecond)
+		fmt.Fprint(w, sseContentWithUsage("b", 100, 20))
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	defer srv.Close()
+
+	b := envelopeBridge(t, srv.URL)
+	started := time.Now().Add(-10 * time.Millisecond)
+	ctx := WithCallMeta(context.Background(), CallMeta{Protocol: "chat", StartedAt: started})
+	if err := b.CallQoderWithOpts(ctx, "codex", testMessages(), "auto", nil, CallOpts{}, func(Delta) {}); err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	rec := RecentCalls(1)[0]
+	if rec.TTFTMS < 10 {
+		t.Errorf("ttft = %dms, want >= 10ms (StartedAt 10ms earlier)", rec.TTFTMS)
+	}
+	if rec.GenerationMS < 50 {
+		t.Errorf("generation = %dms, want >= 50ms", rec.GenerationMS)
+	}
+	if rec.TokensPerSec <= 0 {
+		t.Errorf("tokens/sec = %f, want > 0", rec.TokensPerSec)
+	}
+	// 20 tokens / ~80ms ≈ 250 t/s，给一个宽松范围防止时钟抖动
+	if rec.TokensPerSec < 20 || rec.TokensPerSec > 2000 {
+		t.Errorf("tokens/sec = %.1f, outside sane range", rec.TokensPerSec)
 	}
 }
