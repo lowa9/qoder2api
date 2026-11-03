@@ -198,9 +198,9 @@ type groupBinding struct {
 
 const (
 	// affinityIdleTTL 会话 / 前缀组 / 手动固定的统一闲置有效期。
-	// 上游缓存 TTL 实测约 30–60 分钟（≥16 分钟命中、约 54 分钟失效），
-	// 2 小时足以覆盖；再长同账号也会冷启动，固定/绑定已无缓存收益。
-	affinityIdleTTL = 2 * time.Hour
+	// dfmodel 实测单次预热缓存 TTL ≥5 小时（2/3/4/5h 的全新前缀均 98% 命中），
+	// 取最后命中 + 1 小时余量 = 6 小时。
+	affinityIdleTTL = 6 * time.Hour
 	// sessionBindingTTL 会话绑定的闲置有效期；超过后视为新会话重新选号。
 	sessionBindingTTL = affinityIdleTTL
 	// groupBindingTTL 前缀组（model + system）绑定有效期，与会话/固定一致。
