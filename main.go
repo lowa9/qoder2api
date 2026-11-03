@@ -163,6 +163,7 @@ func main() {
 	mux.HandleFunc("/api/active", handleSetActiveAccount)
 	mux.HandleFunc("/api/pool", handlePoolStatus)
 	mux.HandleFunc("/api/pool/cool", handlePoolCool)
+	mux.HandleFunc("/api/pool/unpin", handlePoolUnpin)
 	mux.HandleFunc("/api/queue/log", handleQueueWaitLog)
 	mux.HandleFunc("/api/settings", handleGetSettings)
 	mux.HandleFunc("/api/settings/save", handleSaveSettings)
@@ -460,6 +461,16 @@ func handlePoolCool(w http.ResponseWriter, r *http.Request) {
 // handleQueueWaitLog 返回最近排队等待记录（最新在前），供控制台「最近等待记录」面板。
 func handleQueueWaitLog(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"entries": svc.RecentWaitLog()})
+}
+
+// handlePoolUnpin 取消手动固定账号，恢复自动选号。
+func handlePoolUnpin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("POST required"))
+		return
+	}
+	svc.UnpinPools()
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func handleGetSettings(w http.ResponseWriter, r *http.Request) {

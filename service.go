@@ -37,6 +37,8 @@ type QoderModel struct {
 type Service struct {
 	bridge      *bridge.Bridge
 	pool        *bridge.Pool
+	poolRegion  account.Region
+	globalPool  *bridge.Pool
 	bridgeSrv   *http.Server
 	globalSrv   *http.Server // 8964：强制 Global 账号池
 	bridgeMu    sync.Mutex
@@ -128,7 +130,14 @@ func (s *Service) DeleteAccount(id string) error {
 	return account.Delete(id)
 }
 
+// SetActiveAccount 控制台「启用」：切换 active 并把该账号固定到对应池，
+// 后续选号优先使用它，直到用户点「自动选号」或桥重启。
 func (s *Service) SetActiveAccount(id string) error {
+	return s.activateAccount(id, true)
+}
+
+// activateAccount pin=false 用于启动时的自动激活（不固定账号）。
+func (s *Service) activateAccount(id string, pin bool) error {
 	if err := account.SetActive(id); err != nil {
 		return err
 	}
@@ -136,7 +145,37 @@ func (s *Service) SetActiveAccount(id string) error {
 	if err != nil || acct == nil {
 		return err
 	}
-	return s.restartBridge(acct)
+	if err := s.restartBridge(acct); err != nil {
+		return err
+	}
+	if pin {
+		s.pinAccount(acct)
+	}
+	return nil
+}
+
+// pinAccount 在账号所属区域的池上设置手动固定。
+func (s *Service) pinAccount(acct *account.Account) {
+	s.bridgeMu.Lock()
+	defer s.bridgeMu.Unlock()
+	if s.pool != nil && s.poolRegion == acct.Region {
+		s.pool.PinAccount(acct.ID)
+	}
+	if s.globalPool != nil && acct.Region == account.RegionGlobal && s.globalPool != s.pool {
+		s.globalPool.PinAccount(acct.ID)
+	}
+}
+
+// UnpinPools 取消所有池的手动固定，恢复会话/前缀组粘性。
+func (s *Service) UnpinPools() {
+	s.bridgeMu.Lock()
+	defer s.bridgeMu.Unlock()
+	if s.pool != nil {
+		s.pool.UnpinAccount()
+	}
+	if s.globalPool != nil {
+		s.globalPool.UnpinAccount()
+	}
 }
 
 func (s *Service) GetStatus() account.Status {
@@ -233,6 +272,7 @@ func (s *Service) StopBridge() error {
 			firstErr = err
 		}
 		s.globalSrv = nil
+		s.globalPool = nil
 	}
 	if s.bridgeSrv == nil {
 		return firstErr
@@ -241,6 +281,8 @@ func (s *Service) StopBridge() error {
 	s.bridgeSrv = nil
 	s.bridge = nil
 	s.pool = nil
+	s.poolRegion = ""
+	s.globalPool = nil
 	if err != nil {
 		return err
 	}
@@ -316,6 +358,7 @@ func (s *Service) startBridgeWithAccount(acct *account.Account) error {
 	s.bridgeMu.Lock()
 	s.bridge = b
 	s.pool = pool
+	s.poolRegion = acct.Region
 	s.bridgeSrv = &http.Server{
 		Addr:    fmt.Sprintf("0.0.0.0:%d", s.bridgePort),
 		Handler: handler,
@@ -361,6 +404,7 @@ func (s *Service) startGlobalBridge(templateBase map[string]interface{}) error {
 
 	s.bridgeMu.Lock()
 	s.globalSrv = srv
+	s.globalPool = pool
 	s.bridgeMu.Unlock()
 
 	logger.Info("Global bridge started on port %d (pool=%d global accounts)", s.globalPort, pool.Size())

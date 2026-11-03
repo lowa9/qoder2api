@@ -172,3 +172,40 @@ func TestPoolPrefixGroupAffinity(t *testing.T) {
 		t.Fatalf("different group pick = %v, want b", s3)
 	}
 }
+
+// TestPoolPinAccount 验证手动固定优先级最高，取消后恢复自动选号，
+// 固定账号冷却时回退。
+func TestPoolPinAccount(t *testing.T) {
+	SetStickyPool(true)
+	t.Cleanup(func() { SetStickyPool(true) })
+
+	oldRand := poolRandIndex
+	poolRandIndex = func(n int) int { return 0 }
+	t.Cleanup(func() { poolRandIndex = oldRand })
+
+	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
+	p.NoteSessionSuccess("sess", "a")
+	p.NoteGroupSuccess("G", "a")
+
+	p.PinAccount("b")
+	if s, _ := p.PickWithAffinity("sess", "G", nil); s.ID != "b" {
+		t.Fatalf("pinned pick = %v, want b", s)
+	}
+	// 状态里能看出 pinned
+	for _, st := range p.Status() {
+		if st.ID == "b" && !st.Pinned {
+			t.Error("status should mark b as pinned")
+		}
+	}
+
+	p.UnpinAccount()
+	if s, _ := p.PickWithAffinity("sess", "G", nil); s.ID != "a" {
+		t.Fatalf("after unpin = %v, want session binding a", s)
+	}
+
+	p.PinAccount("b")
+	p.Cool("b", time.Minute, "test")
+	if s, ok := p.PickWithAffinity("sess", "G", nil); !ok || s.ID != "a" {
+		t.Fatalf("cooling pinned should fall back = %v, want a", s)
+	}
+}

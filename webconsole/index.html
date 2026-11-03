@@ -190,6 +190,10 @@ th { white-space: nowrap; }
     <section class="card" data-view="accounts">
       <h3>状态</h3>
       <div class="row" id="statusMeta"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="secondary" id="autoPickBtn">自动选号</button>
+        <span class="muted" id="pickHint"></span>
+      </div>
     </section>
 
     <section class="card" data-view="accounts">
@@ -771,7 +775,7 @@ th { white-space: nowrap; }
           <td class="quota-cell" data-quota-id="${a.id}">${renderQuota(cachedQuota)}</td>
           <td data-refresh-id="${a.id}">${renderRefreshCell(a.id)}</td>
           <td class="row">
-            <button class="secondary" data-act="activate" data-id="${a.id}" ${a.active ? 'disabled' : ''}>启用</button>
+            <button class="secondary" data-act="activate" data-id="${a.id}" title="切换并把流量固定到该账号" ${a.active ? 'disabled' : ''}>启用/固定</button>
             <button class="secondary" data-act="quota" data-id="${a.id}">刷新额度</button>
             <button class="secondary" data-act="checkin" data-id="${a.id}">🎁 签到</button>
             <button class="secondary" data-act="cool" data-id="${a.id}">冷却</button>
@@ -1124,6 +1128,12 @@ th { white-space: nowrap; }
       try {
         let pool = null;
         try { pool = await api('/api/pool'); } catch (e) {}
+        if ($('pickHint')) {
+          const pinned = ((pool && pool.slots) || []).find(s => s.pinned);
+          $('pickHint').textContent = pinned
+            ? `当前固定账号：${pinned.name}（点「自动选号」恢复会话/前缀组粘性）`
+            : '自动选号：会话内复用 + 相同 system 前缀复用';
+        }
         const accounts = await api('/api/accounts');
         renderAccounts(accounts, pool);
         // 并行拉额度
@@ -1217,6 +1227,13 @@ th { white-space: nowrap; }
 
     $('ctxTierSave').onclick = saveCtxTier;
     $('refreshBtn').onclick = refresh;
+
+    $('autoPickBtn').onclick = async () => {
+      try {
+        await api('/api/pool/unpin', { method: 'POST' });
+        await refresh();
+      } catch (e) { alert('恢复自动选号失败：' + e.message); }
+    };
 
     // 积分扣除维度切换
     $('creditAcctBtn').onclick = () => { creditDim = 'account'; renderCredits(); };

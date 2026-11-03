@@ -134,7 +134,10 @@ type Pool struct {
 	sessions map[string]sessionBinding
 	// groups 前缀组（system prompt + 模型）-> 账号绑定。
 	// 同一 system 的新会话（上下文压缩、续写）复用同一账号以命中缓存。
-	groups    map[string]sessionBinding
+	groups map[string]sessionBinding
+	// pinned 手动固定的账号（控制台「启用」）。优先级最高，
+	// 直到用户点「自动选号」或桥重启。
+	pinned    string
 	statePath string // 非空时把冷却状态持久化到该文件（重启不丢）
 }
 
@@ -311,9 +314,11 @@ func (p *Pool) pick(sessionKey, groupKey string, exclude map[string]struct{}, fi
 	p.mu.Lock()
 	start := p.cursor
 	stickyID := p.lastSuccess
+	pinnedID := ""
 	sessionAcc := ""
 	groupAcc := ""
 	if stickyEnabled.Load() {
+		pinnedID = p.pinned
 		if sessionKey != "" {
 			if b, ok := p.sessions[sessionKey]; ok && now.Sub(b.seen) < sessionBindingTTL {
 				sessionAcc = b.accountID
@@ -351,6 +356,10 @@ func (p *Pool) pick(sessionKey, groupKey string, exclude map[string]struct{}, fi
 		return nil
 	}
 
+	// 0) 手动固定最高优先级
+	if s := usable(pinnedID); s != nil {
+		return s, true
+	}
 	// 1) 会话绑定优先
 	if s := usable(sessionAcc); s != nil {
 		return s, true
@@ -420,6 +429,31 @@ func (p *Pool) NoteSessionSuccess(sessionKey, id string) {
 	p.sessions[sessionKey] = sessionBinding{accountID: id, seen: now}
 	if len(p.sessions) > maxSessionBindings {
 		p.pruneSessionsLocked(now)
+	}
+}
+
+// PinAccount 手动固定账号：后续选号优先使用它（冷却/不支持模型时回退）。
+func (p *Pool) PinAccount(id string) {
+	if p == nil || id == "" {
+		return
+	}
+	p.mu.Lock()
+	p.pinned = id
+	p.mu.Unlock()
+	logger.Info("pool: pinned account %s (manual)", id)
+}
+
+// UnpinAccount 取消手动固定，恢复会话/前缀组粘性。
+func (p *Pool) UnpinAccount() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	was := p.pinned
+	p.pinned = ""
+	p.mu.Unlock()
+	if was != "" {
+		logger.Info("pool: unpinned account %s (auto)", was)
 	}
 }
 
@@ -608,6 +642,7 @@ type SlotStatus struct {
 	Name               string `json:"name"`
 	Region             string `json:"region"`
 	CoolingRemainingMS int64  `json:"cooling_remaining_ms"`
+	Pinned             bool   `json:"pinned,omitempty"`
 	LastError          string `json:"last_error,omitempty"`
 }
 
@@ -627,9 +662,14 @@ func (p *Pool) Status() []SlotStatus {
 	if p == nil {
 		return nil
 	}
+	p.mu.Lock()
+	pinned := p.pinned
+	p.mu.Unlock()
 	out := []SlotStatus{}
 	for _, s := range p.snapshot() {
-		out = append(out, s.Status())
+		st := s.Status()
+		st.Pinned = st.ID == pinned
+		out = append(out, st)
 	}
 	return out
 }
