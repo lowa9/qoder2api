@@ -198,7 +198,7 @@ th { white-space: nowrap; }
     </section>
 
     <section class="card" data-view="accounts" hidden>
-      <h3>活跃前缀组 <span class="muted" style="font-size:12px">（同 system + 模型的缓存路由；每次成功请求续期，闲置 2 小时过期）</span></h3>
+      <h3>活跃前缀组 <span class="muted" style="font-size:12px">（同 system + 模型的缓存路由；每次成功请求续期，闲置 6 小时过期）</span></h3>
       <div id="groupsBox" style="font-size:12px">加载中...</div>
     </section>
 
@@ -1185,7 +1185,7 @@ th { white-space: nowrap; }
         if ($('pickHint')) {
           const pinned = ((pool && pool.slots) || []).find(s => s.pinned);
           $('pickHint').textContent = pinned
-            ? `当前路由账号：${pinned.name}（${pinned.pinned_manual ? '手动' : '自动'}；闲置 2h 自动改选额度最高）`
+            ? `当前路由账号：${pinned.name}（${pinned.pinned_manual ? '手动' : '自动'}；闲置 6h 自动改选额度最高）`
             : '自动选号：未绑定请求使用当前路由账号，额度耗尽自动改选额度最高';
         }
         const accounts = await api('/api/accounts');
