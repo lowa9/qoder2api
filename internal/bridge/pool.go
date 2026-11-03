@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -171,7 +172,7 @@ type Pool struct {
 	sessions map[string]sessionBinding
 	// groups 前缀组（system prompt + 模型）-> 账号绑定。
 	// 同一 system 的新会话（上下文压缩、续写）复用同一账号以命中缓存。
-	groups map[string]sessionBinding
+	groups map[string]groupBinding
 	// pinned 当前路由账号：手动「设为当前」或自动选出（额度最高）。
 	// 它低于会话/前缀组绑定，是"未绑定请求的默认账号 + 绑定账号没额度时的兜底"。
 	// 闲置超过 pinIdleTTL 后自动改选额度最高的账号。
@@ -185,6 +186,14 @@ type Pool struct {
 type sessionBinding struct {
 	accountID string
 	seen      time.Time
+}
+
+// groupBinding 一个前缀组当前绑定的账号，附带展示用元数据。
+type groupBinding struct {
+	accountID string
+	seen      time.Time
+	model     string
+	preview   string
 }
 
 const (
@@ -644,18 +653,26 @@ func (p *Pool) RefreshCurrent(now time.Time) {
 	p.setCurrentAuto(slots[idx].ID, now)
 }
 
-// NoteGroupSuccess 记录前缀组与账号的绑定。
-func (p *Pool) NoteGroupSuccess(groupKey, id string) {
+// NoteGroupSuccess 记录前缀组与账号的绑定（meta 可选：model、system 预览）。
+// 每次成功请求都会调用，因此活跃前缀组会持续续期。
+func (p *Pool) NoteGroupSuccess(groupKey, id string, meta ...string) {
 	if p == nil || groupKey == "" {
 		return
+	}
+	model, preview := "", ""
+	if len(meta) > 0 {
+		model = meta[0]
+	}
+	if len(meta) > 1 {
+		preview = meta[1]
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.groups == nil {
-		p.groups = map[string]sessionBinding{}
+		p.groups = map[string]groupBinding{}
 	}
 	now := time.Now()
-	p.groups[groupKey] = sessionBinding{accountID: id, seen: now}
+	p.groups[groupKey] = groupBinding{accountID: id, seen: now, model: model, preview: preview}
 	if len(p.groups) > maxGroupBindings {
 		for k, b := range p.groups {
 			if now.Sub(b.seen) >= groupBindingTTL {
@@ -830,6 +847,54 @@ func retryAfterFromDetail(detail string) (time.Duration, bool) {
 		d = 5 * time.Minute
 	}
 	return d, true
+}
+
+// GroupStatus 是给控制台展示的活跃前缀组。
+type GroupStatus struct {
+	Key          string    `json:"key"`
+	Preview      string    `json:"preview,omitempty"`
+	Model        string    `json:"model,omitempty"`
+	Account      string    `json:"account"`
+	AccountID    string    `json:"account_id,omitempty"`
+	Region       string    `json:"region,omitempty"`
+	LastSeen     time.Time `json:"last_seen"`
+	RemainingSec int64     `json:"remaining_sec"`
+}
+
+// GroupsStatus 返回未过期的前缀组绑定，按最近命中倒序。
+func (p *Pool) GroupsStatus(now time.Time) []GroupStatus {
+	if p == nil {
+		return nil
+	}
+	slots := p.snapshot()
+	names := make(map[string]*Slot, len(slots))
+	for _, s := range slots {
+		names[s.ID] = s
+	}
+	p.mu.Lock()
+	out := make([]GroupStatus, 0, len(p.groups))
+	for k, b := range p.groups {
+		age := now.Sub(b.seen)
+		if age >= groupBindingTTL {
+			continue
+		}
+		g := GroupStatus{
+			Key:          k,
+			Preview:      b.preview,
+			Model:        b.model,
+			AccountID:    b.accountID,
+			LastSeen:     b.seen,
+			RemainingSec: int64((groupBindingTTL - age).Seconds()),
+		}
+		if s := names[b.accountID]; s != nil {
+			g.Account = s.Name
+			g.Region = string(s.Region)
+		}
+		out = append(out, g)
+	}
+	p.mu.Unlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].LastSeen.After(out[j].LastSeen) })
+	return out
 }
 
 // SlotStatus 是给控制台/运维看的账号池运行时状态。

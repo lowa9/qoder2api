@@ -76,11 +76,11 @@ func (b *Bridge) coolSlot(id string, d time.Duration, reason string) {
 }
 
 // noteSlotSuccess 记录成功（仅池模式下生效）。
-func (b *Bridge) noteSlotSuccess(id, sessionKey, groupKey string) {
+func (b *Bridge) noteSlotSuccess(id, sessionKey, groupKey, model, groupPreview string) {
 	if b.pool != nil {
 		b.pool.NoteSuccess(id)
 		b.pool.NoteSessionSuccess(sessionKey, id)
-		b.pool.NoteGroupSuccess(groupKey, id)
+		b.pool.NoteGroupSuccess(groupKey, id, model, groupPreview)
 	}
 }
 

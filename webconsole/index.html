@@ -197,6 +197,11 @@ th { white-space: nowrap; }
       </div>
     </section>
 
+    <section class="card" data-view="accounts" hidden>
+      <h3>活跃前缀组 <span class="muted" style="font-size:12px">（同 system + 模型的缓存路由；每次成功请求续期，闲置 2 小时过期）</span></h3>
+      <div id="groupsBox" style="font-size:12px">加载中...</div>
+    </section>
+
     <section class="card" data-view="accounts">
       <h3>添加账号</h3>
       <div class="grid-2">
@@ -1120,6 +1125,37 @@ th { white-space: nowrap; }
       $('creditBox').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead style="color:var(--ink-3)">${head}</thead><tbody>${body}</tbody></table>`;
     }
 
+    function fmtTTL(sec) {
+      sec = Math.max(0, Number(sec) || 0);
+      if (sec >= 3600) return (sec / 3600).toFixed(1) + 'h';
+      if (sec >= 60) return Math.round(sec / 60) + 'm';
+      return sec + 's';
+    }
+
+    async function loadGroups() {
+      try {
+        const data = await api('/api/groups');
+        const gs = data.groups || [];
+        if (!gs.length) {
+          $('groupsBox').innerHTML = '<span class="muted">暂无活跃前缀组（只有带 system prompt 的成功请求才会生成）</span>';
+          return;
+        }
+        const rows = gs.slice(0, 100).map(g => {
+          const acct = g.account || g.account_id || '-';
+          return `<tr><td>${esc(g.model || '-')}</td>` +
+            `<td title="${esc(g.key)}">${esc(g.preview || g.key)}</td>` +
+            `<td>${esc(acct)} <span class="muted">(${esc(g.region || '-')})</span></td>` +
+            `<td>${fmtCallTime(g.last_seen)}</td>` +
+            `<td style="text-align:right">${fmtTTL(g.remaining_sec)}</td></tr>`;
+        }).join('');
+        $('groupsBox').innerHTML = `<table style="width:100%;border-collapse:collapse">` +
+          `<thead><tr style="color:var(--muted)"><th>模型</th><th>前缀预览</th><th>绑定账号</th><th>最近命中</th><th style="text-align:right">剩余 TTL</th></tr></thead>` +
+          `<tbody>${rows}</tbody></table>`;
+      } catch (e) {
+        $('groupsBox').innerHTML = `<span class="msg err">${esc(e.message)}</span>`;
+      }
+    }
+
     async function loadCredits() {
       try {
         creditCache = await api('/api/credits');
@@ -1141,6 +1177,7 @@ th { white-space: nowrap; }
       loadWaitLog();
       loadCalls();
       loadCredits();
+      loadGroups();
 
       try {
         let pool = null;

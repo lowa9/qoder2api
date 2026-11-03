@@ -272,6 +272,18 @@ access token 并回传新的 refresh_token）在过期前**主动续期**。
 
 ## 更新记录
 
+### 🧩 活跃前缀组面板 + 上游变更检查（2026-11-03）
+
+**2026-11-03 CST** · 本地特性（`local/org-resource-package` 分支）
+
+- **「活跃前缀组」面板**（账号池）：展示模型、system 前缀预览、绑定账号、
+  最近命中时间与剩余 TTL，数据来自新增的 `GET /api/groups`；
+- 前缀组只在请求带 **system prompt** 时生成（键 = `hash(model + 首个 system)`）；
+- **每次成功请求都会续期**（`NoteGroupSuccess` 刷新 seen），活跃流量下不会过期；
+  闲置 2 小时过期，与上游缓存 TTL（实测约 30–60 分钟）留有余量；
+- 新增 `scripts/check_upstream.py`：对比上游新提交与 `/v1/models` 快照
+  （模型增删、价格、上下文、输出、档位），支持 cron 定时检查。
+
 ### 🔀 路由模型调整：当前账号是默认/兜底（2026-11-03）
 
 **2026-11-03 CST** · 本地特性（`local/org-resource-package` 分支）
@@ -1472,6 +1484,16 @@ sudo systemctl enable --now qoder2api
 ```bash
 ./scripts/sync-upstream.sh            # 同步 fork main → rebase 本地分支 → build/test
 ./scripts/sync-upstream.sh --deploy   # 额外构建并重启本机服务
+
+# 仅检查、不合并：新提交 + 模型清单/价格/上下文变化
+./scripts/check_upstream.py
+```
+
+`check_upstream.py` 把状态保存在 `$QODER2API_HOME/upstream_check.json`，
+首次运行只建立基线；可配合定时任务：
+
+```cron
+17 9 * * * cd /path/to/qoder2api && ./scripts/check_upstream.py >> ~/.qoder2api-cn/upstream-check.log 2>&1
 ```
 
 遇到 rebase 冲突：解决冲突 → `git rebase --continue` → 重新执行脚本。

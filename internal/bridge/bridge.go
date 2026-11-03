@@ -658,6 +658,20 @@ func derivePrefixGroup(messages []interface{}, model string) string {
 	return "pfx:" + hex.EncodeToString(sum[:8])
 }
 
+// systemPreview 取首条 system 消息的短预览，用于控制台展示前缀组。
+func systemPreview(messages []interface{}, max int) string {
+	for _, it := range messages {
+		m, ok := it.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if role, _ := m["role"].(string); role == "system" {
+			return truncateRunesForLog(NormalizeMessageContent(m), max)
+		}
+	}
+	return ""
+}
+
 // shortSession 日志展示用：只保留前缀。
 func shortSession(s string) string {
 	if len(s) > 18 {
@@ -685,6 +699,7 @@ func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages [
 		sessionKey = deriveSessionKey(messages)
 	}
 	groupKey := derivePrefixGroup(messages, model)
+	groupPreview := systemPreview(messages, 80)
 	rec := CallRecord{
 		Time:          startedAt,
 		RequestID:     meta.RequestID,
@@ -943,7 +958,7 @@ func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages [
 			}
 		}
 		if err == nil {
-			b.noteSlotSuccess(slot.ID, sessionKey, groupKey)
+			b.noteSlotSuccess(slot.ID, sessionKey, groupKey, model, groupPreview)
 			return nil
 		}
 		lastErr = err

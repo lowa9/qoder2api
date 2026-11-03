@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -629,6 +630,25 @@ func (s *Service) GetLogs(limit int) []logger.Entry {
 // RecentCalls 返回最近的模型调用记录（结构化，供控制台「模型调用日志」面板）。
 func (s *Service) RecentCalls(limit int) []bridge.CallRecord {
 	return bridge.RecentCalls(limit)
+}
+
+// GroupsStatus 返回所有池中仍活跃的前缀组（最近命中倒序）。
+func (s *Service) GroupsStatus() []bridge.GroupStatus {
+	s.bridgeMu.Lock()
+	pools := []*bridge.Pool{s.pool, s.globalPool}
+	s.bridgeMu.Unlock()
+	now := time.Now()
+	seen := map[*bridge.Pool]bool{}
+	var out []bridge.GroupStatus
+	for _, p := range pools {
+		if p == nil || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p.GroupsStatus(now)...)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].LastSeen.After(out[j].LastSeen) })
+	return out
 }
 
 // CreditSummary 返回积分扣除历史聚合（按账号 / 按模型）。
