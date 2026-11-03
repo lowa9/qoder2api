@@ -209,3 +209,36 @@ func TestPoolPinAccount(t *testing.T) {
 		t.Fatalf("cooling pinned should fall back = %v, want a", s)
 	}
 }
+
+// TestPoolPinnedSkipsAffinity 验证固定期间不写入会话/前缀组绑定，
+// 取消固定后同一会话/前缀组会重新随机，而不是继续粘在原账号。
+func TestPoolPinnedSkipsAffinity(t *testing.T) {
+	SetStickyPool(true)
+	t.Cleanup(func() { SetStickyPool(true) })
+
+	oldRand := poolRandIndex
+	poolRandIndex = func(n int) int { return 0 }
+	t.Cleanup(func() { poolRandIndex = oldRand })
+
+	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
+	p.PinAccount("b")
+	s, _ := p.PickWithAffinity("sess", "G", nil)
+	if s.ID != "b" {
+		t.Fatalf("pinned pick = %v, want b", s)
+	}
+	p.NoteSessionSuccess("sess", s.ID)
+	p.NoteGroupSuccess("G", s.ID)
+
+	p.mu.Lock()
+	nSessions, nGroups := len(p.sessions), len(p.groups)
+	p.mu.Unlock()
+	if nSessions != 0 || nGroups != 0 {
+		t.Fatalf("bindings should be skipped while pinned: sessions=%d groups=%d", nSessions, nGroups)
+	}
+
+	p.UnpinAccount()
+	// 随机源返回 0 → 取消固定后重新随机到 a
+	if s2, _ := p.PickWithAffinity("sess", "G", nil); s2.ID != "a" {
+		t.Fatalf("after unpin = %v, want a (random again)", s2)
+	}
+}

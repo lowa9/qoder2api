@@ -422,6 +422,9 @@ func (p *Pool) NoteSessionSuccess(sessionKey, id string) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.pinned != "" {
+		return // 手动固定期间不写绑定，避免取消固定后仍粘在原账号
+	}
 	if p.sessions == nil {
 		p.sessions = map[string]sessionBinding{}
 	}
@@ -451,9 +454,22 @@ func (p *Pool) UnpinAccount() {
 	p.mu.Lock()
 	was := p.pinned
 	p.pinned = ""
+	if was != "" {
+		// 清掉指向被固定账号的会话/前缀组绑定，让它们重新走随机/其他绑定
+		for k, b := range p.sessions {
+			if b.accountID == was {
+				delete(p.sessions, k)
+			}
+		}
+		for k, b := range p.groups {
+			if b.accountID == was {
+				delete(p.groups, k)
+			}
+		}
+	}
 	p.mu.Unlock()
 	if was != "" {
-		logger.Info("pool: unpinned account %s (auto)", was)
+		logger.Info("pool: unpinned account %s (auto), cleared its affinities", was)
 	}
 }
 
@@ -464,6 +480,9 @@ func (p *Pool) NoteGroupSuccess(groupKey, id string) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.pinned != "" {
+		return // 同上
+	}
 	if p.groups == nil {
 		p.groups = map[string]sessionBinding{}
 	}

@@ -192,6 +192,7 @@ th { white-space: nowrap; }
       <div class="row" id="statusMeta"></div>
       <div class="row" style="margin-top:10px">
         <button class="secondary" id="autoPickBtn">自动选号</button>
+        <span class="msg" id="autoPickMsg"></span>
         <span class="muted" id="pickHint"></span>
       </div>
     </section>
@@ -1229,10 +1230,17 @@ th { white-space: nowrap; }
     $('refreshBtn').onclick = refresh;
 
     $('autoPickBtn').onclick = async () => {
+      $('autoPickMsg').className = 'msg';
+      $('autoPickMsg').textContent = '处理中...';
       try {
         await api('/api/pool/unpin', { method: 'POST' });
         await refresh();
-      } catch (e) { alert('恢复自动选号失败：' + e.message); }
+        $('autoPickMsg').className = 'msg ok';
+        $('autoPickMsg').textContent = '已恢复自动选号';
+      } catch (e) {
+        $('autoPickMsg').className = 'msg err';
+        $('autoPickMsg').textContent = '恢复失败：' + e.message;
+      }
     };
 
     // 积分扣除维度切换
