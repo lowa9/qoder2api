@@ -173,86 +173,138 @@ func TestPoolPrefixGroupAffinity(t *testing.T) {
 	}
 }
 
-// TestPoolPinAccount 验证手动固定优先级最高，取消后恢复自动选号，
-// 固定账号冷却时回退。
-func TestPoolPinAccount(t *testing.T) {
+// TestPoolCurrentIsDefaultNotOverride 验证当前路由账号是默认/兜底，
+// 已有会话/前缀组绑定仍然优先。
+func TestPoolCurrentIsDefaultNotOverride(t *testing.T) {
 	SetStickyPool(true)
 	t.Cleanup(func() { SetStickyPool(true) })
 
-	oldRand := poolRandIndex
-	poolRandIndex = func(n int) int { return 0 }
-	t.Cleanup(func() { poolRandIndex = oldRand })
-
 	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
+	p.SetQuota("a", 500, 0, false)
+	p.SetQuota("b", 500, 0, false)
 	p.NoteSessionSuccess("sess", "a")
 	p.NoteGroupSuccess("G", "a")
-
 	p.PinAccount("b")
-	if s, _ := p.PickWithAffinity("sess", "G", nil); s.ID != "b" {
-		t.Fatalf("pinned pick = %v, want b", s)
-	}
-	// 状态里能看出 pinned
-	for _, st := range p.Status() {
-		if st.ID == "b" && !st.Pinned {
-			t.Error("status should mark b as pinned")
-		}
-	}
 
-	p.UnpinAccount()
 	if s, _ := p.PickWithAffinity("sess", "G", nil); s.ID != "a" {
-		t.Fatalf("after unpin = %v, want session binding a", s)
+		t.Fatalf("bound session = %v, want a (binding wins)", s)
 	}
-
-	p.PinAccount("b")
-	p.Cool("b", time.Minute, "test")
-	if s, ok := p.PickWithAffinity("sess", "G", nil); !ok || s.ID != "a" {
-		t.Fatalf("cooling pinned should fall back = %v, want a", s)
+	// 没有绑定（新会话/新前缀组）才用当前路由账号
+	if s, _ := p.PickWithAffinity("new", "G2", nil); s.ID != "b" {
+		t.Fatalf("unbound session = %v, want current b", s)
 	}
 }
 
-// TestPoolPinnedSkipsAffinity 验证固定期间不写入会话/前缀组绑定，
-// 取消固定后同一会话/前缀组会重新随机，而不是继续粘在原账号。
-func TestPoolPinnedSkipsAffinity(t *testing.T) {
+// TestPoolCurrentFallbackWhenBindingNoQuota 验证绑定账号没额度时，
+// 先用当前路由账号，再退到额度最高的账号。
+func TestPoolCurrentFallbackWhenBindingNoQuota(t *testing.T) {
 	SetStickyPool(true)
 	t.Cleanup(func() { SetStickyPool(true) })
 
-	oldRand := poolRandIndex
-	poolRandIndex = func(n int) int { return 0 }
-	t.Cleanup(func() { poolRandIndex = oldRand })
+	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"), testSlot(t, "c", "t"))
+	p.NoteSessionSuccess("sess", "a")
+	p.NoteGroupSuccess("G", "a")
+	p.PinAccount("b")
+	p.SetQuota("a", 0, 0, false)
+	p.SetQuota("b", 500, 0, false)
+	p.SetQuota("c", 900, 0, false)
+
+	if s, _ := p.PickWithAffinity("sess", "G", nil); s.ID != "b" {
+		t.Fatalf("fallback = %v, want current b (has quota)", s)
+	}
+
+	// 当前账号也没额度 → 自动选额度最高的 c，并把当前账号改为 c（自动）
+	p.SetQuota("b", 0, 0, false)
+	if s, _ := p.PickWithAffinity("sess", "G", nil); s.ID != "c" {
+		t.Fatalf("auto fallback = %v, want c (highest quota)", s)
+	}
+	found := false
+	for _, st := range p.Status() {
+		if st.ID == "c" {
+			found = st.Pinned && !st.PinnedManual
+		}
+	}
+	if !found {
+		t.Error("current routing account should switch to c (auto)")
+	}
+}
+
+// TestPoolCurrentIdleExpiryAutoSelectsHighest 验证当前账号闲置过期后
+// 立即改选额度最高的账号（自动），而不是清空等待。
+func TestPoolCurrentIdleExpiryAutoSelectsHighest(t *testing.T) {
+	SetStickyPool(true)
+	t.Cleanup(func() { SetStickyPool(true) })
+
+	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
+	p.SetQuota("a", 500, 0, false)
+	p.SetQuota("b", 100, 0, false)
+	p.PinAccount("b")
+	p.mu.Lock()
+	p.pinnedAt = time.Now().Add(-pinIdleTTL - time.Minute)
+	p.mu.Unlock()
+
+	if s, _ := p.PickWithAffinity("new", "G", nil); s.ID != "a" {
+		t.Fatalf("expired current = %v, want a (highest quota)", s)
+	}
+	found := false
+	for _, st := range p.Status() {
+		if st.ID == "a" {
+			found = st.Pinned && !st.PinnedManual
+		}
+	}
+	if !found {
+		t.Error("current should auto-switch to a")
+	}
+}
+
+// TestPoolAutoSelectCurrent 验证「自动选号」立即切到额度最高的账号。
+func TestPoolAutoSelectCurrent(t *testing.T) {
+	SetStickyPool(true)
+	t.Cleanup(func() { SetStickyPool(true) })
+
+	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"), testSlot(t, "c", "t"))
+	p.SetQuota("a", 100, 0, false)
+	p.SetQuota("b", 500, 0, false)
+	p.SetQuota("c", 300, 0, false)
+
+	if id := p.AutoSelectCurrent(); id != "b" {
+		t.Fatalf("auto current = %q, want b", id)
+	}
+	if s, _ := p.PickWithAffinity("new", "G", nil); s.ID != "b" {
+		t.Fatalf("pick = %v, want b", s)
+	}
+}
+
+// TestPoolBindingsWrittenWithCurrent 验证当前账号只是兜底，绑定仍会正常写入。
+func TestPoolBindingsWrittenWithCurrent(t *testing.T) {
+	SetStickyPool(true)
+	t.Cleanup(func() { SetStickyPool(true) })
 
 	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
 	p.PinAccount("b")
 	s, _ := p.PickWithAffinity("sess", "G", nil)
 	if s.ID != "b" {
-		t.Fatalf("pinned pick = %v, want b", s)
+		t.Fatalf("pick = %v, want b", s)
 	}
 	p.NoteSessionSuccess("sess", s.ID)
 	p.NoteGroupSuccess("G", s.ID)
-
 	p.mu.Lock()
 	nSessions, nGroups := len(p.sessions), len(p.groups)
 	p.mu.Unlock()
-	if nSessions != 0 || nGroups != 0 {
-		t.Fatalf("bindings should be skipped while pinned: sessions=%d groups=%d", nSessions, nGroups)
-	}
-
-	p.UnpinAccount()
-	// 随机源返回 0 → 取消固定后重新随机到 a
-	if s2, _ := p.PickWithAffinity("sess", "G", nil); s2.ID != "a" {
-		t.Fatalf("after unpin = %v, want a (random again)", s2)
+	if nSessions == 0 || nGroups == 0 {
+		t.Fatalf("bindings should be written: sessions=%d groups=%d", nSessions, nGroups)
 	}
 }
 
-// TestPoolSelectsHighestQuota 验证自动选号时优先剩余额度最高的账号；
-// 该账号冷却后选次高的。
+// TestPoolSelectsHighestQuota 验证没有当前账号时按剩余额度最高选号。
 func TestPoolSelectsHighestQuota(t *testing.T) {
 	SetStickyPool(true)
 	t.Cleanup(func() { SetStickyPool(true) })
 
 	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"), testSlot(t, "c", "t"))
-	p.SetQuota("a", 100)
-	p.SetQuota("b", 500)
-	p.SetQuota("c", 300)
+	p.SetQuota("a", 100, 0, false)
+	p.SetQuota("b", 500, 0, false)
+	p.SetQuota("c", 300, 0, false)
 
 	s, ok := p.PickWithAffinity("new-1", "G1", nil)
 	if !ok || s.ID != "b" {
@@ -265,46 +317,21 @@ func TestPoolSelectsHighestQuota(t *testing.T) {
 	}
 }
 
-// TestPoolPinIdleExpiry 验证手动固定闲置超过 TTL 后自动失效，
-// 回到按剩余额度选号。
-func TestPoolPinIdleExpiry(t *testing.T) {
+// TestPoolCurrentRefreshOnSuccess 验证当前账号有成功请求时续期，不会闲置过期。
+func TestPoolCurrentRefreshOnSuccess(t *testing.T) {
 	SetStickyPool(true)
 	t.Cleanup(func() { SetStickyPool(true) })
 
 	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
-	p.SetQuota("a", 500)
-	p.SetQuota("b", 100)
+	p.SetQuota("a", 500, 0, false)
+	p.SetQuota("b", 100, 0, false)
 	p.PinAccount("b")
 	p.mu.Lock()
 	p.pinnedAt = time.Now().Add(-pinIdleTTL - time.Minute)
 	p.mu.Unlock()
-
-	s, ok := p.PickWithAffinity("new", "G", nil)
-	if !ok || s.ID != "a" {
-		t.Fatalf("expired pin pick = %v, want a (highest quota)", s)
-	}
-	for _, st := range p.Status() {
-		if st.Pinned {
-			t.Errorf("pin should be cleared after idle TTL, slot=%s", st.ID)
-		}
-	}
-}
-
-// TestPoolPinRefreshedOnSuccess 验证固定账号有成功请求时续期，不会闲置过期。
-func TestPoolPinRefreshedOnSuccess(t *testing.T) {
-	SetStickyPool(true)
-	t.Cleanup(func() { SetStickyPool(true) })
-
-	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
-	p.SetQuota("a", 500)
-	p.SetQuota("b", 100)
-	p.PinAccount("b")
-	p.mu.Lock()
-	p.pinnedAt = time.Now().Add(-pinIdleTTL - time.Minute)
-	p.mu.Unlock()
-	p.NoteSuccess("b") // 成功请求应刷新固定闲置时间
+	p.NoteSuccess("b") // 成功请求刷新闲置时间
 
 	if s, ok := p.PickWithAffinity("new", "G", nil); !ok || s.ID != "b" {
-		t.Fatalf("refreshed pin pick = %v, want b", s)
+		t.Fatalf("refreshed current = %v, want b", s)
 	}
 }

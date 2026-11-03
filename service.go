@@ -131,16 +131,14 @@ func (s *Service) DeleteAccount(id string) error {
 	return account.Delete(id)
 }
 
-// SetActiveAccount 控制台「启用」：切换 active 并把该账号固定到对应池，
-// 后续选号优先使用它，直到用户点「自动选号」或桥重启。
+// SetActiveAccount 控制台「设为当前」：把该账号设为当前路由账号。
+// 现有会话/前缀组的绑定不受影响；未绑定请求优先使用它，绑定账号没额度时也作为兜底。
 func (s *Service) SetActiveAccount(id string) error {
 	return s.activateAccount(id, true)
 }
 
 // activateAccount pin=false 用于启动时的自动激活（不固定账号）。
 func (s *Service) activateAccount(id string, pin bool) error {
-	cur, _ := account.GetActive()
-	already := cur != nil && cur.ID == id
 	if err := account.SetActive(id); err != nil {
 		return err
 	}
@@ -150,9 +148,11 @@ func (s *Service) activateAccount(id string, pin bool) error {
 	}
 	s.bridgeMu.Lock()
 	running := s.bridgeSrv != nil
+	hasPool := (s.pool != nil && s.poolRegion == acct.Region) ||
+		(acct.Region == account.RegionGlobal && s.globalPool != nil)
 	s.bridgeMu.Unlock()
-	// 已经启用且桥在运行：重复点击只刷新固定，不重启桥
-	if already && running {
+	// 桥已在运行且该区域有池：只切换当前路由账号，不重启桥（不影响已有会话）
+	if running && hasPool {
 		if pin {
 			s.pinAccount(acct)
 		}
@@ -228,25 +228,34 @@ func (s *Service) RefreshQuotas() {
 		for _, pkg := range q.DedicatedPackages {
 			rem += pkg.Remaining
 		}
+		orgRem, orgAvail := 0.0, false
+		if q.OrgResourcePackage != nil {
+			orgRem, orgAvail = q.OrgResourcePackage.Remaining, q.OrgResourcePackage.Available
+		}
 		for _, pool := range pools {
 			if pool != nil {
-				pool.SetQuota(a.ID, rem)
+				pool.SetQuota(a.ID, rem, orgRem, orgAvail)
 			}
 		}
 		updated++
 	}
+	for _, pool := range pools {
+		if pool != nil {
+			pool.RefreshCurrent(time.Now())
+		}
+	}
 	logger.Info("quota refresh: %d/%d accounts updated", updated, len(accounts))
 }
 
-// UnpinPools 取消所有池的手动固定，恢复会话/前缀组粘性。
+// UnpinPools 立即把各池当前路由账号切换为剩余额度最高的账号。
 func (s *Service) UnpinPools() {
 	s.bridgeMu.Lock()
 	defer s.bridgeMu.Unlock()
 	if s.pool != nil {
-		s.pool.UnpinAccount()
+		s.pool.AutoSelectCurrent()
 	}
 	if s.globalPool != nil {
-		s.globalPool.UnpinAccount()
+		s.globalPool.AutoSelectCurrent()
 	}
 }
 

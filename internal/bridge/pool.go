@@ -80,25 +80,42 @@ type Slot struct {
 	catalog   map[string]bool
 	catalogAt time.Time
 
-	// 额度缓存：用于自动选号时优先选剩余额度最高的账号。
+	// 额度缓存：用于自动选号与"额度耗尽"兜底。
+	// quotaRemaining 仅含账号自身额度（user+addon+专属包）；
+	// orgRemaining/orgAvailable 是组织共享包（所有账号共用，仅用于判断"还有没有额度"）。
 	quotaMu        sync.Mutex
 	quotaRemaining float64
+	orgRemaining   float64
+	orgAvailable   bool
 	quotaAt        time.Time
 }
 
 // SetQuota 更新账号剩余额度缓存（由 Service 定期刷新）。
-func (s *Slot) SetQuota(remaining float64) {
+func (s *Slot) SetQuota(remaining, orgRemaining float64, orgAvailable bool) {
 	s.quotaMu.Lock()
 	s.quotaRemaining = remaining
+	s.orgRemaining = orgRemaining
+	s.orgAvailable = orgAvailable
 	s.quotaAt = time.Now()
 	s.quotaMu.Unlock()
 }
 
-// quota 返回剩余额度与采集时间。
+// quota 返回账号自身剩余额度与采集时间。
 func (s *Slot) quota() (float64, time.Time) {
 	s.quotaMu.Lock()
 	defer s.quotaMu.Unlock()
 	return s.quotaRemaining, s.quotaAt
+}
+
+// hasQuota 判断账号是否还有可用额度。额度未知或过旧时视为可用，
+// 避免因刷新失败把正常账号误判为耗尽。
+func (s *Slot) hasQuota(now time.Time) bool {
+	s.quotaMu.Lock()
+	defer s.quotaMu.Unlock()
+	if s.quotaAt.IsZero() || now.Sub(s.quotaAt) > quotaFreshFor {
+		return true
+	}
+	return s.quotaRemaining > 0 || (s.orgAvailable && s.orgRemaining > 0)
 }
 
 // snapshot 返回当前会话与客户端的快照。会话可能被续期替换，读取必须走此方法。
@@ -155,12 +172,13 @@ type Pool struct {
 	// groups 前缀组（system prompt + 模型）-> 账号绑定。
 	// 同一 system 的新会话（上下文压缩、续写）复用同一账号以命中缓存。
 	groups map[string]sessionBinding
-	// pinned 手动固定的账号（控制台「启用」）。优先级最高，
-	// 闲置超过 pinIdleTTL 后自动失效（上游缓存 TTL 实测约 30–60 分钟，
-	// 再久同账号也会冷启动，固定已无收益）。
-	pinned    string
-	pinnedAt  time.Time
-	statePath string // 非空时把冷却状态持久化到该文件（重启不丢）
+	// pinned 当前路由账号：手动「设为当前」或自动选出（额度最高）。
+	// 它低于会话/前缀组绑定，是"未绑定请求的默认账号 + 绑定账号没额度时的兜底"。
+	// 闲置超过 pinIdleTTL 后自动改选额度最高的账号。
+	pinned       string
+	pinnedManual bool
+	pinnedAt     time.Time
+	statePath    string // 非空时把冷却状态持久化到该文件（重启不丢）
 }
 
 // sessionBinding 一个会话当前绑定的账号。
@@ -342,16 +360,17 @@ func (p *Pool) pick(sessionKey, groupKey string, exclude map[string]struct{}, fi
 	p.mu.Lock()
 	start := p.cursor
 	stickyID := p.lastSuccess
-	pinnedID := ""
-	expiredPin := ""
+	currentID := ""
 	sessionAcc := ""
 	groupAcc := ""
 	if stickyEnabled.Load() {
-		pinnedID = p.pinned
-		if pinnedID != "" && !p.pinnedAt.IsZero() && now.Sub(p.pinnedAt) > pinIdleTTL {
-			expiredPin = pinnedID
-			pinnedID = ""
+		currentID = p.pinned
+		// 当前路由账号闲置过期：清除，稍后立即改选额度最高
+		if currentID != "" && !p.pinnedAt.IsZero() && now.Sub(p.pinnedAt) > pinIdleTTL {
+			logger.Info("pool: current routing account %s expired after %s idle", currentID, pinIdleTTL)
+			currentID = ""
 			p.pinned = ""
+			p.pinnedManual = false
 			p.pinnedAt = time.Time{}
 		}
 		if sessionKey != "" {
@@ -366,81 +385,89 @@ func (p *Pool) pick(sessionKey, groupKey string, exclude map[string]struct{}, fi
 		}
 	}
 	p.mu.Unlock()
-	if expiredPin != "" {
-		logger.Info("pool: pinned account %s expired after %s idle, back to auto", expiredPin, pinIdleTTL)
-	}
-	// 关闭粘性时退化为纯轮询：忽略会话/前缀组绑定与随机起点
+	// 关闭粘性时退化为纯轮询
 	if !stickyEnabled.Load() {
 		sessionKey, groupKey = "", ""
-		sessionAcc, groupAcc = "", ""
+		sessionAcc, groupAcc, currentID = "", "", ""
 	}
 
-	usable := func(id string) *Slot {
+	usable := func(id string, requireQuota bool) *Slot {
 		if id == "" {
 			return nil
 		}
 		if _, skip := exclude[id]; skip {
 			return nil
 		}
-		for _, s := range slots {
-			if s.ID != id || !s.available(now) {
+		for _, sl := range slots {
+			if sl.ID != id || !sl.available(now) {
 				continue
 			}
-			if filter != nil && !filter(s) {
+			if filter != nil && !filter(sl) {
 				return nil
 			}
-			return s
+			if requireQuota && !sl.hasQuota(now) {
+				return nil
+			}
+			return sl
 		}
 		return nil
 	}
 
-	// 0) 手动固定最高优先级
-	if s := usable(pinnedID); s != nil {
+	// 1) 会话绑定（额度耗尽时跳过，走兜底）
+	if s := usable(sessionAcc, true); s != nil {
 		return s, true
 	}
-	// 1) 会话绑定优先
-	if s := usable(sessionAcc); s != nil {
+	// 2) 前缀组绑定（同上）
+	if s := usable(groupAcc, true); s != nil {
 		return s, true
 	}
-	// 2) 同一 system 前缀（压缩/续写产生的新会话）复用账号
-	if s := usable(groupAcc); s != nil {
+	// 3) 当前路由账号（手动选择或上次自动选择）
+	if s := usable(currentID, true); s != nil {
 		return s, true
 	}
-	// 3) 无会话/前缀组标识时才使用全局粘性
-	if sessionKey == "" && groupKey == "" && stickyEnabled.Load() {
-		if s := usable(stickyID); s != nil {
-			return s, true
+
+	// 4) 兜底：选择剩余额度最高的账号。
+	// 当前账号为空/额度耗尽/被删除时，立即把它改写为这个自动选出的账号；
+	// 仅冷却时保留原当前账号，本次请求借用其他账号。
+	autoIdx := p.bestQuotaIndex(slots, exclude, now, filter)
+	currentSlot := (*Slot)(nil)
+	for _, sl := range slots {
+		if sl.ID == currentID {
+			currentSlot = sl
+			break
 		}
 	}
-	// 4) 无可用绑定时：优先剩余额度最高的账号；没有额度数据再随机。
-	if stickyEnabled.Load() {
-		if idx := p.bestQuotaIndex(slots, exclude, now, filter); idx >= 0 {
-			start = idx
-		} else if poolRandIndex != nil {
-			if (sessionKey != "" || groupKey != "") && sessionAcc == "" && groupAcc == "" {
-				start = poolRandIndex(n)
-			} else if sessionKey == "" && groupKey == "" && stickyID == "" {
-				start = poolRandIndex(n)
-			}
+	needNewCurrent := currentID == "" || currentSlot == nil ||
+		!currentSlot.available(now) || !currentSlot.hasQuota(now)
+	if stickyEnabled.Load() && autoIdx >= 0 {
+		if needNewCurrent {
+			p.setCurrentAuto(slots[autoIdx].ID, now)
+		}
+		start = autoIdx
+	} else if stickyEnabled.Load() && poolRandIndex != nil {
+		if (sessionKey != "" || groupKey != "") && sessionAcc == "" && groupAcc == "" {
+			start = poolRandIndex(n)
+		} else if sessionKey == "" && groupKey == "" && stickyID == "" {
+			start = poolRandIndex(n)
 		}
 	}
 
 	for i := 0; i < n; i++ {
 		idx := (start + i) % n
-		s := slots[idx]
-		if _, skip := exclude[s.ID]; skip {
+		sl := slots[idx]
+		if _, skip := exclude[sl.ID]; skip {
 			continue
 		}
-		if !s.available(now) {
+		if !sl.available(now) {
 			continue
 		}
-		if filter != nil && !filter(s) {
+		if filter != nil && !filter(sl) {
 			continue
 		}
 		p.mu.Lock()
 		p.cursor = (idx + 1) % n
 		p.mu.Unlock()
-		return s, true
+		return sl, true
 	}
 	return nil, false
 }
@@ -464,9 +491,6 @@ func (p *Pool) NoteSessionSuccess(sessionKey, id string) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.pinned != "" {
-		return // 手动固定期间不写绑定，避免取消固定后仍粘在原账号
-	}
 	if p.sessions == nil {
 		p.sessions = map[string]sessionBinding{}
 	}
@@ -477,11 +501,11 @@ func (p *Pool) NoteSessionSuccess(sessionKey, id string) {
 	}
 }
 
-// SetQuota 更新某个账号的剩余额度缓存（供自动选号排序）。
-func (p *Pool) SetQuota(id string, remaining float64) {
+// SetQuota 更新某个账号的剩余额度缓存（供自动选号排序与额度兜底）。
+func (p *Pool) SetQuota(id string, remaining, orgRemaining float64, orgAvailable bool) {
 	for _, s := range p.snapshot() {
 		if s.ID == id {
-			s.SetQuota(remaining)
+			s.SetQuota(remaining, orgRemaining, orgAvailable)
 			return
 		}
 	}
@@ -522,19 +546,33 @@ func (p *Pool) bestQuotaIndex(slots []*Slot, exclude map[string]struct{}, now ti
 	return best
 }
 
-// PinAccount 手动固定账号：后续选号优先使用它（冷却/不支持模型时回退）。
+// setCurrentAuto 把当前路由账号设为 id（自动来源）。
+func (p *Pool) setCurrentAuto(id string, now time.Time) {
+	p.mu.Lock()
+	changed := p.pinned != id || p.pinnedManual
+	p.pinned = id
+	p.pinnedManual = false
+	p.pinnedAt = now
+	p.mu.Unlock()
+	if changed {
+		logger.Info("pool: current routing account -> %s (auto)", id)
+	}
+}
+
+// PinAccount 手动选择当前路由账号（控制台「设为当前」）。
 func (p *Pool) PinAccount(id string) {
 	if p == nil || id == "" {
 		return
 	}
 	p.mu.Lock()
 	p.pinned = id
+	p.pinnedManual = true
 	p.pinnedAt = time.Now()
 	p.mu.Unlock()
-	logger.Info("pool: pinned account %s (manual, idle TTL %s)", id, pinIdleTTL)
+	logger.Info("pool: current routing account -> %s (manual, idle TTL %s)", id, pinIdleTTL)
 }
 
-// UnpinAccount 取消手动固定，恢复会话/前缀组粘性。
+// UnpinAccount 清除当前路由账号（不自动选号）。
 func (p *Pool) UnpinAccount() {
 	if p == nil {
 		return
@@ -542,24 +580,68 @@ func (p *Pool) UnpinAccount() {
 	p.mu.Lock()
 	was := p.pinned
 	p.pinned = ""
+	p.pinnedManual = false
 	p.pinnedAt = time.Time{}
-	if was != "" {
-		// 清掉指向被固定账号的会话/前缀组绑定，让它们重新走随机/其他绑定
-		for k, b := range p.sessions {
-			if b.accountID == was {
-				delete(p.sessions, k)
-			}
-		}
-		for k, b := range p.groups {
-			if b.accountID == was {
-				delete(p.groups, k)
-			}
-		}
-	}
 	p.mu.Unlock()
 	if was != "" {
-		logger.Info("pool: unpinned account %s (auto), cleared its affinities", was)
+		logger.Info("pool: cleared current routing account %s", was)
 	}
+}
+
+// AutoSelectCurrent 立即把当前路由账号改为剩余额度最高的账号。
+func (p *Pool) AutoSelectCurrent() string {
+	if p == nil {
+		return ""
+	}
+	slots := p.snapshot()
+	now := time.Now()
+	idx := p.bestQuotaIndex(slots, nil, now, nil)
+	if idx < 0 {
+		p.UnpinAccount()
+		return ""
+	}
+	p.setCurrentAuto(slots[idx].ID, now)
+	return slots[idx].ID
+}
+
+// RefreshCurrent 在额度刷新后校正当前路由账号：
+// 闲置过期、额度耗尽或账号不存在时，立即改选额度最高的账号。
+func (p *Pool) RefreshCurrent(now time.Time) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	cur := p.pinned
+	at := p.pinnedAt
+	p.mu.Unlock()
+
+	slots := p.snapshot()
+	var curSlot *Slot
+	for _, sl := range slots {
+		if sl.ID == cur {
+			curSlot = sl
+			break
+		}
+	}
+	expired := cur != "" && (at.IsZero() || now.Sub(at) > pinIdleTTL)
+	noQuota := curSlot != nil && !curSlot.hasQuota(now)
+	if cur != "" && curSlot != nil && !expired && !noQuota {
+		return // 当前账号仍然健康
+	}
+	idx := p.bestQuotaIndex(slots, nil, now, nil)
+	if idx < 0 {
+		if expired || noQuota || cur == "" || curSlot == nil {
+			p.UnpinAccount()
+		}
+		return
+	}
+	p.mu.Lock()
+	sameCurrent := p.pinned == cur
+	p.mu.Unlock()
+	if !sameCurrent {
+		return // 期间被手动改选，尊重手动选择
+	}
+	p.setCurrentAuto(slots[idx].ID, now)
 }
 
 // NoteGroupSuccess 记录前缀组与账号的绑定。
@@ -569,9 +651,6 @@ func (p *Pool) NoteGroupSuccess(groupKey, id string) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.pinned != "" {
-		return // 同上
-	}
 	if p.groups == nil {
 		p.groups = map[string]sessionBinding{}
 	}
@@ -623,8 +702,14 @@ func (p *Pool) NoteSuccess(id string) {
 			s.noteSuccess()
 			p.mu.Lock()
 			p.lastSuccess = id
-			if p.pinned == id {
-				p.pinnedAt = time.Now() // 有流量即续期
+			now := time.Now()
+			switch {
+			case p.pinned == id:
+				p.pinnedAt = now // 有流量即续期
+			case p.pinned == "":
+				p.pinned = id
+				p.pinnedManual = false
+				p.pinnedAt = now
 			}
 			p.mu.Unlock()
 			p.save()
@@ -754,6 +839,7 @@ type SlotStatus struct {
 	Region             string `json:"region"`
 	CoolingRemainingMS int64  `json:"cooling_remaining_ms"`
 	Pinned             bool   `json:"pinned,omitempty"`
+	PinnedManual       bool   `json:"pinned_manual,omitempty"`
 	LastUsed           bool   `json:"last_used,omitempty"`
 	LastError          string `json:"last_error,omitempty"`
 }
@@ -776,12 +862,14 @@ func (p *Pool) Status() []SlotStatus {
 	}
 	p.mu.Lock()
 	pinned := p.pinned
+	manual := p.pinnedManual
 	lastUsed := p.lastSuccess
 	p.mu.Unlock()
 	out := []SlotStatus{}
 	for _, s := range p.snapshot() {
 		st := s.Status()
 		st.Pinned = st.ID == pinned
+		st.PinnedManual = st.Pinned && manual
 		st.LastUsed = !st.Pinned && st.ID == lastUsed
 		out = append(out, st)
 	}

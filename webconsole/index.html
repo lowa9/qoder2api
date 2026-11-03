@@ -772,9 +772,11 @@ th { white-space: nowrap; }
         const poolNote = (slot && coolMs > 0 && slot.last_error)
           ? `<div class="muted" style="font-size:11px">${slot.last_error}</div>` : '';
         const curBadge = slot && slot.pinned
-          ? '<span class="pill" style="border-color:transparent;background:var(--accent-soft);color:var(--accent)">当前 · 固定</span>'
+          ? (slot.pinned_manual
+            ? '<span class="pill" style="border-color:transparent;background:var(--accent-soft);color:var(--accent)">当前 · 手动</span>'
+            : '<span class="pill" style="border-color:transparent;background:var(--accent-soft);color:var(--accent)">当前 · 自动</span>')
           : (slot && slot.last_used
-            ? '<span class="pill" style="border-color:transparent;background:var(--accent-soft);color:var(--accent)">当前 · 自动</span>'
+            ? '<span class="pill">最近使用</span>'
             : '');
         return `
         <tr data-id="${a.id}">
@@ -790,7 +792,7 @@ th { white-space: nowrap; }
           <td class="quota-cell" data-quota-id="${a.id}">${renderQuota(cachedQuota)}</td>
           <td data-refresh-id="${a.id}">${renderRefreshCell(a.id)}</td>
           <td class="row">
-            <button class="secondary" data-act="activate" data-id="${a.id}" title="切换并固定到该账号（可重复点击）">启用/固定</button>
+            <button class="secondary" data-act="activate" data-id="${a.id}" title="设为当前路由账号（不影响已有会话/前缀组绑定）">设为当前</button>
             <button class="secondary" data-act="quota" data-id="${a.id}">刷新额度</button>
             <button class="secondary" data-act="checkin" data-id="${a.id}">🎁 签到</button>
             <button class="secondary" data-act="cool" data-id="${a.id}">冷却</button>
@@ -1146,8 +1148,8 @@ th { white-space: nowrap; }
         if ($('pickHint')) {
           const pinned = ((pool && pool.slots) || []).find(s => s.pinned);
           $('pickHint').textContent = pinned
-            ? `当前固定账号：${pinned.name}（闲置 2 小时自动失效；点「自动选号」恢复会话/前缀组粘性）`
-            : '自动选号：新会话优先剩余额度最高，之后会话/前缀组复用';
+            ? `当前路由账号：${pinned.name}（${pinned.pinned_manual ? '手动' : '自动'}；闲置 2h 自动改选额度最高）`
+            : '自动选号：未绑定请求使用当前路由账号，额度耗尽自动改选额度最高';
         }
         const accounts = await api('/api/accounts');
         renderAccounts(accounts, pool);
@@ -1250,7 +1252,7 @@ th { white-space: nowrap; }
         await api('/api/pool/unpin', { method: 'POST' });
         await refresh();
         $('autoPickMsg').className = 'msg ok';
-        $('autoPickMsg').textContent = '已恢复自动选号（下一次请求重新选号）';
+        $('autoPickMsg').textContent = '已切换为额度最高的账号';
       } catch (e) {
         $('autoPickMsg').className = 'msg err';
         $('autoPickMsg').textContent = '恢复失败：' + e.message;
