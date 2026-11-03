@@ -448,8 +448,8 @@ th { white-space: nowrap; }
       const cnOn = !!running;
       const glOn = extra.global_running !== false && !!running;
       $('statusMeta').innerHTML = `
-        <span class="pill">CN 8963: ${cnOn ? 'ON' : 'OFF'} · 启用 ${extra.cn_active_name || extra.cn_active || '无'}</span>
-        <span class="pill">Global 8964: ${glOn ? 'ON' : 'OFF'} · 启用 ${extra.global_active_name || extra.global_active || '无'}</span>
+        <span class="pill">CN 8963: ${cnOn ? 'ON' : 'OFF'} · 当前 ${extra.cn_active_name || extra.cn_active || '待选号'}</span>
+        <span class="pill">Global 8964: ${glOn ? 'ON' : 'OFF'} · 当前 ${extra.global_active_name || extra.global_active || '待选号'}</span>
         <span class="pill">API: ${extra.api_mode || '-'}</span>
       `;
     }
@@ -771,10 +771,15 @@ th { white-space: nowrap; }
           : '';
         const poolNote = (slot && coolMs > 0 && slot.last_error)
           ? `<div class="muted" style="font-size:11px">${slot.last_error}</div>` : '';
+        const curBadge = slot && slot.pinned
+          ? '<span class="pill" style="border-color:transparent;background:var(--accent-soft);color:var(--accent)">当前 · 固定</span>'
+          : (slot && slot.last_used
+            ? '<span class="pill" style="border-color:transparent;background:var(--accent-soft);color:var(--accent)">当前 · 自动</span>'
+            : '');
         return `
         <tr data-id="${a.id}">
           <td>
-            <div><strong>${a.name || a.id}</strong> ${a.active ? '<span class="pill">启用</span>' : ''} ${poolBadge}</div>
+            <div><strong>${a.name || a.id}</strong> ${curBadge} ${poolBadge}</div>
             <div class="muted">${a.email || '-'}</div>
             ${poolNote}
           </td>
@@ -785,7 +790,7 @@ th { white-space: nowrap; }
           <td class="quota-cell" data-quota-id="${a.id}">${renderQuota(cachedQuota)}</td>
           <td data-refresh-id="${a.id}">${renderRefreshCell(a.id)}</td>
           <td class="row">
-            <button class="secondary" data-act="activate" data-id="${a.id}" title="切换并把流量固定到该账号" ${a.active ? 'disabled' : ''}>启用/固定</button>
+            <button class="secondary" data-act="activate" data-id="${a.id}" title="切换并固定到该账号（可重复点击）">启用/固定</button>
             <button class="secondary" data-act="quota" data-id="${a.id}">刷新额度</button>
             <button class="secondary" data-act="checkin" data-id="${a.id}">🎁 签到</button>
             <button class="secondary" data-act="cool" data-id="${a.id}">冷却</button>
@@ -802,9 +807,9 @@ th { white-space: nowrap; }
       let html = '';
       for (const g of groups) {
         if (!g.arr.length) continue;
-        const act = g.arr.find(a => a.active);
-        const activeTxt = act ? (act.name || act.id) : '无（点击账号行「启用」）';
-        html += `<tr class="region-row"><td colspan="5"><span class="region-tag ${g.cls}">${g.tag}</span>${g.title}<span class="region-active">启用账号：${activeTxt}</span></td></tr>`;
+        const cur = g.arr.find(a => poolById[a.id] && (poolById[a.id].pinned || poolById[a.id].last_used));
+        const activeTxt = cur ? (cur.name || cur.id) : '待选号（自动选号）';
+        html += `<tr class="region-row"><td colspan="5"><span class="region-tag ${g.cls}">${g.tag}</span>${g.title}<span class="region-active">当前账号：${activeTxt}</span></td></tr>`;
         html += g.arr.map(rowHtml).join('');
       }
       $('accountBody').innerHTML = html;
@@ -1245,7 +1250,7 @@ th { white-space: nowrap; }
         await api('/api/pool/unpin', { method: 'POST' });
         await refresh();
         $('autoPickMsg').className = 'msg ok';
-        $('autoPickMsg').textContent = '已恢复自动选号';
+        $('autoPickMsg').textContent = '已恢复自动选号（下一次请求重新选号）';
       } catch (e) {
         $('autoPickMsg').className = 'msg err';
         $('autoPickMsg').textContent = '恢复失败：' + e.message;

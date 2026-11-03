@@ -731,6 +731,7 @@ type SlotStatus struct {
 	Region             string `json:"region"`
 	CoolingRemainingMS int64  `json:"cooling_remaining_ms"`
 	Pinned             bool   `json:"pinned,omitempty"`
+	LastUsed           bool   `json:"last_used,omitempty"`
 	LastError          string `json:"last_error,omitempty"`
 }
 
@@ -752,11 +753,13 @@ func (p *Pool) Status() []SlotStatus {
 	}
 	p.mu.Lock()
 	pinned := p.pinned
+	lastUsed := p.lastSuccess
 	p.mu.Unlock()
 	out := []SlotStatus{}
 	for _, s := range p.snapshot() {
 		st := s.Status()
 		st.Pinned = st.ID == pinned
+		st.LastUsed = !st.Pinned && st.ID == lastUsed
 		out = append(out, st)
 	}
 	return out

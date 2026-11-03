@@ -139,12 +139,24 @@ func (s *Service) SetActiveAccount(id string) error {
 
 // activateAccount pin=false 用于启动时的自动激活（不固定账号）。
 func (s *Service) activateAccount(id string, pin bool) error {
+	cur, _ := account.GetActive()
+	already := cur != nil && cur.ID == id
 	if err := account.SetActive(id); err != nil {
 		return err
 	}
 	acct, err := account.GetActive()
 	if err != nil || acct == nil {
 		return err
+	}
+	s.bridgeMu.Lock()
+	running := s.bridgeSrv != nil
+	s.bridgeMu.Unlock()
+	// 已经启用且桥在运行：重复点击只刷新固定，不重启桥
+	if already && running {
+		if pin {
+			s.pinAccount(acct)
+		}
+		return nil
 	}
 	if err := s.restartBridge(acct); err != nil {
 		return err
@@ -238,6 +250,41 @@ func (s *Service) UnpinPools() {
 	}
 }
 
+// poolForRegions 返回 CN/Global 各自对应的池（调用方需持有 bridgeMu）。
+func (s *Service) poolForRegions() (cn, global *bridge.Pool) {
+	if s.pool != nil {
+		switch s.poolRegion {
+		case account.RegionCN:
+			cn = s.pool
+		case account.RegionGlobal:
+			global = s.pool
+		}
+	}
+	if s.globalPool != nil {
+		global = s.globalPool
+	}
+	return cn, global
+}
+
+// effectiveSlot 返回池中当前实际使用的账号：固定优先，其次最近成功。
+func effectiveSlot(p *bridge.Pool) *bridge.SlotStatus {
+	if p == nil {
+		return nil
+	}
+	sts := p.Status()
+	for i := range sts {
+		if sts[i].Pinned {
+			return &sts[i]
+		}
+	}
+	for i := range sts {
+		if sts[i].LastUsed {
+			return &sts[i]
+		}
+	}
+	return nil
+}
+
 func (s *Service) GetStatus() account.Status {
 	s.bridgeMu.Lock()
 	defer s.bridgeMu.Unlock()
@@ -248,17 +295,22 @@ func (s *Service) GetStatus() account.Status {
 		activeID = acct.ID
 		apiMode = acct.APIMode
 	}
-	// 两区各自的启用账号，供控制台分区展示
+	// 两区各自"当前实际使用"的账号：池内固定优先，其次最近成功；
+	// 还没有任何请求时回退到手动启用账号。
 	cnActive, _ := account.GetActiveByRegion(account.RegionCN)
 	globalActive, _ := account.GetActiveByRegion(account.RegionGlobal)
 	st := account.Status{Running: running, Port: s.bridgePort, ActiveAccount: activeID, APIMode: apiMode}
-	if cnActive != nil {
-		st.CNActive = cnActive.ID
-		st.CNActiveName = cnActive.Name
+
+	poolCN, poolGL := s.poolForRegions()
+	if eff := effectiveSlot(poolCN); eff != nil {
+		st.CNActive, st.CNActiveName = eff.ID, eff.Name
+	} else if !running && cnActive != nil {
+		st.CNActive, st.CNActiveName = cnActive.ID, cnActive.Name
 	}
-	if globalActive != nil {
-		st.GlobalActive = globalActive.ID
-		st.GlobalActiveName = globalActive.Name
+	if eff := effectiveSlot(poolGL); eff != nil {
+		st.GlobalActive, st.GlobalActiveName = eff.ID, eff.Name
+	} else if !running && globalActive != nil {
+		st.GlobalActive, st.GlobalActiveName = globalActive.ID, globalActive.Name
 	}
 	st.GlobalRunning = s.globalSrv != nil
 	return st
