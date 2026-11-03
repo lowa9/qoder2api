@@ -170,15 +170,18 @@ type sessionBinding struct {
 }
 
 const (
-	// sessionBindingTTL 会话绑定的闲置有效期；超过后视为新会话重新随机。
-	sessionBindingTTL = 2 * time.Hour
+	// affinityIdleTTL 会话 / 前缀组 / 手动固定的统一闲置有效期。
+	// 上游缓存 TTL 实测约 30–60 分钟（≥16 分钟命中、约 54 分钟失效），
+	// 2 小时足以覆盖；再长同账号也会冷启动，固定/绑定已无缓存收益。
+	affinityIdleTTL = 2 * time.Hour
+	// sessionBindingTTL 会话绑定的闲置有效期；超过后视为新会话重新选号。
+	sessionBindingTTL = affinityIdleTTL
+	// groupBindingTTL 前缀组（model + system）绑定有效期，与会话/固定一致。
+	groupBindingTTL = affinityIdleTTL
+	// pinIdleTTL 手动固定账号的闲置有效期。
+	pinIdleTTL = affinityIdleTTL
 	// maxSessionBindings 绑定表上限，超出时淘汰最久未使用的条目。
 	maxSessionBindings = 1024
-	// groupBindingTTL 前缀组绑定有效期（比会话更长，覆盖压缩/续写）。
-	groupBindingTTL = 6 * time.Hour
-	// pinIdleTTL 手动固定账号的闲置有效期。实测缓存 TTL 约 30–60 分钟，
-	// 2 小时足够覆盖且不会让固定失去意义。
-	pinIdleTTL = 2 * time.Hour
 	// maxGroupBindings 前缀组绑定表上限。
 	maxGroupBindings = 256
 )
