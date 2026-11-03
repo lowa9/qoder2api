@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.qoder2api.upstream-check</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/python3</string>
+    <string>-I</string>
+    <string>/Users/kai/repos/qoder2api/scripts/check_upstream.py</string>
+  </array>
+
+  <!-- 以普通用户运行，保证能读写仓库与数据目录 -->
+  <key>UserName</key>
+  <string>kai</string>
+  <key>GroupName</key>
+  <string>staff</string>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/kai/repos/qoder2api</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>/Users/kai</string>
+    <key>QODER2API_HOME</key>
+    <string>/Users/kai/.qoder2api-cn</string>
+  </dict>
+
+  <!-- 每天 09:17 检查上游提交与模型清单 -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>9</integer>
+    <key>Minute</key>
+    <integer>17</integer>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/kai/.qoder2api-cn/upstream-check.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/kai/.qoder2api-cn/upstream-check.log</string>
+</dict>
+</plist>

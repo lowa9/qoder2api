@@ -1490,10 +1490,30 @@ sudo systemctl enable --now qoder2api
 ```
 
 `check_upstream.py` 把状态保存在 `$QODER2API_HOME/upstream_check.json`，
-首次运行只建立基线；可配合定时任务：
+首次运行只建立基线；可配合定时任务。
+
+**macOS 有 GUI 登录**：把 `StartCalendarInterval` 的 LaunchAgent 放进
+`~/Library/LaunchAgents/` 即可。
+
+**macOS 无头服务器（无 gui 域，推荐 LaunchDaemon）**：
+
+```bash
+sudo cp scripts/local.qoder2api.upstream-check.daemon.plist \
+  /Library/LaunchDaemons/local.qoder2api.upstream-check.plist
+sudo chown root:wheel /Library/LaunchDaemons/local.qoder2api.upstream-check.plist
+sudo chmod 644 /Library/LaunchDaemons/local.qoder2api.upstream-check.plist
+sudo launchctl bootstrap system /Library/LaunchDaemons/local.qoder2api.upstream-check.plist
+sudo launchctl kickstart -k system/local.qoder2api.upstream-check
+```
+
+查看：`sudo launchctl print system/local.qoder2api.upstream-check`，
+日志在 `~/.qoder2api-cn/upstream-check.log`。
+
+**不用 sudo 的替代方案（crontab）**：
 
 ```cron
-17 9 * * * cd /path/to/qoder2api && ./scripts/check_upstream.py >> ~/.qoder2api-cn/upstream-check.log 2>&1
+PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+17 9 * * * cd /Users/kai/repos/qoder2api && QODER2API_HOME=/Users/kai/.qoder2api-cn /opt/homebrew/bin/python3 -I scripts/check_upstream.py >> /Users/kai/.qoder2api-cn/upstream-check.log 2>&1
 ```
 
 遇到 rebase 冲突：解决冲突 → `git rebase --continue` → 重新执行脚本。
