@@ -617,6 +617,14 @@ th { white-space: nowrap; }
       return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
     }
 
+    // 毫秒时间戳 → YYYY-MM-DD HH:mm
+    function fmtDateTime(ms) {
+      const d = new Date(Number(ms));
+      if (Number.isNaN(d.getTime())) return '-';
+      const p = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    }
+
     function fmtNum(n) {
       if (n == null || Number.isNaN(n)) return '-';
       return Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 });
@@ -656,6 +664,7 @@ th { white-space: nowrap; }
             已用 ${fmtNum(u)} / ${fmtNum(t)} · 剩余 ${fmtNum(r)}<br/>
             <div class="bar ${cls}"><i style="width:${pct}%"></i></div>
             ${userBucket.reset_time ? `<div>重置：${userBucket.reset_time}</div>` : ''}
+            ${q.expires_at ? `<div class="muted" style="font-size:11px" title="上游 expiresAt，Team 账号通常为月度额度刷新时间">额度刷新：${fmtDateTime(q.expires_at)}</div>` : ''}
           </div>
         `;
       } else {
@@ -1133,7 +1142,7 @@ th { white-space: nowrap; }
           const pinned = ((pool && pool.slots) || []).find(s => s.pinned);
           $('pickHint').textContent = pinned
             ? `当前固定账号：${pinned.name}（点「自动选号」恢复会话/前缀组粘性）`
-            : '自动选号：会话内复用 + 相同 system 前缀复用';
+            : '自动选号：新会话优先剩余额度最高，之后会话/前缀组复用';
         }
         const accounts = await api('/api/accounts');
         renderAccounts(accounts, pool);

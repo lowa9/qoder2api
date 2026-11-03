@@ -242,3 +242,25 @@ func TestPoolPinnedSkipsAffinity(t *testing.T) {
 		t.Fatalf("after unpin = %v, want a (random again)", s2)
 	}
 }
+
+// TestPoolSelectsHighestQuota 验证自动选号时优先剩余额度最高的账号；
+// 该账号冷却后选次高的。
+func TestPoolSelectsHighestQuota(t *testing.T) {
+	SetStickyPool(true)
+	t.Cleanup(func() { SetStickyPool(true) })
+
+	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"), testSlot(t, "c", "t"))
+	p.SetQuota("a", 100)
+	p.SetQuota("b", 500)
+	p.SetQuota("c", 300)
+
+	s, ok := p.PickWithAffinity("new-1", "G1", nil)
+	if !ok || s.ID != "b" {
+		t.Fatalf("highest quota pick = %v, want b", s)
+	}
+	p.Cool("b", time.Minute, "test")
+	s2, ok := p.PickWithAffinity("new-2", "G2", nil)
+	if !ok || s2.ID != "c" {
+		t.Fatalf("after cooling b = %v, want c", s2)
+	}
+}

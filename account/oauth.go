@@ -294,8 +294,8 @@ func FetchQuota(token string, region Region) (*QuotaInfo, error) {
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 
-	fmt.Printf("[QUOTA DEBUG] API URL: %s\n", ep.QuotaEndpoint)
-	fmt.Printf("[QUOTA DEBUG] Raw response: %s\n", string(raw))
+	logger.Debug("[quota] API URL: %s\n", ep.QuotaEndpoint)
+	logger.Debug("[quota] Raw response: %s\n", string(raw))
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(raw, &result); err != nil {
@@ -310,28 +310,28 @@ func FetchQuota(token string, region Region) (*QuotaInfo, error) {
 
 	if uq := extractBucket(result, "userQuota"); uq != nil {
 		info.UserQuota = uq
-		fmt.Printf("[QUOTA DEBUG] userQuota found: %+v\n", uq)
+		logger.Debug("[quota] userQuota found: %+v\n", uq)
 	} else {
-		fmt.Printf("[QUOTA DEBUG] userQuota NOT found in response\n")
+		logger.Debug("[quota] userQuota NOT found in response\n")
 	}
 
 	if aq := extractBucket(result, "addOnQuota"); aq != nil {
 		info.AddonQuota = aq
-		fmt.Printf("[QUOTA DEBUG] addonQuota found: %+v\n", aq)
+		logger.Debug("[quota] addonQuota found: %+v\n", aq)
 	} else {
-		fmt.Printf("[QUOTA DEBUG] addonQuota NOT found in response\n")
+		logger.Debug("[quota] addonQuota NOT found in response\n")
 	}
 
 	// 专属资源包（活动奖励，如 SOTA 专属积分）。单独成桶，
 	// 通常带独立过期时间，不在 user/addon 额度内。
 	info.DedicatedPackages = extractDedicatedPackages(result)
-	fmt.Printf("[QUOTA DEBUG] dedicatedResourcePackages found: %d\n", len(info.DedicatedPackages))
+	logger.Debug("[quota] dedicatedResourcePackages found: %d\n", len(info.DedicatedPackages))
 
 	// 组织共享流量包（Team 账号）。个人套餐额度用尽后上游自动改从这里扣费，
 	// 若不解析，控制台会显示「剩余 0」而误判账号不可用。
 	info.OrgResourcePackage = extractOrgResourcePackage(result)
 	if info.OrgResourcePackage != nil {
-		fmt.Printf("[QUOTA DEBUG] orgResourcePackage found: %+v\n", *info.OrgResourcePackage)
+		logger.Debug("[quota] orgResourcePackage found: %+v\n", *info.OrgResourcePackage)
 	}
 
 	return info, nil

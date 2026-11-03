@@ -46,6 +46,7 @@ type Service struct {
 	globalPort  int
 	bridgeToken string
 	basePrompt  []byte
+	quotaOnce   sync.Once
 }
 
 func NewService(basePrompt []byte) *Service {
@@ -164,6 +165,65 @@ func (s *Service) pinAccount(acct *account.Account) {
 	if s.globalPool != nil && acct.Region == account.RegionGlobal && s.globalPool != s.pool {
 		s.globalPool.PinAccount(acct.ID)
 	}
+}
+
+// StartQuotaRefresher 定期刷新账号剩余额度，供自动选号做负载均衡。
+func (s *Service) StartQuotaRefresher(interval time.Duration) {
+	if interval <= 0 {
+		interval = 10 * time.Minute
+	}
+	s.quotaOnce.Do(func() {
+		go func() {
+			time.Sleep(5 * time.Second)
+			s.RefreshQuotas()
+			t := time.NewTicker(interval)
+			defer t.Stop()
+			for range t.C {
+				s.RefreshQuotas()
+			}
+		}()
+		logger.Info("quota refresher started (interval=%s)", interval)
+	})
+}
+
+// RefreshQuotas 拉取所有账号剩余额度并写入对应账号池，供自动选号排序。
+func (s *Service) RefreshQuotas() {
+	accounts, err := account.List()
+	if err != nil {
+		return
+	}
+	s.bridgeMu.Lock()
+	pools := []*bridge.Pool{s.pool, s.globalPool}
+	s.bridgeMu.Unlock()
+
+	updated := 0
+	for _, a := range accounts {
+		if !account.HasSecret(a.ID) {
+			continue
+		}
+		q, err := s.GetAccountQuota(a.ID)
+		if err != nil {
+			logger.Debug("quota refresh %s: %v", a.Name, err)
+			continue
+		}
+		rem := 0.0
+		if q.UserQuota != nil {
+			rem += q.UserQuota.Remaining
+		}
+		if q.AddonQuota != nil {
+			rem += q.AddonQuota.Remaining
+		}
+		for _, pkg := range q.DedicatedPackages {
+			rem += pkg.Remaining
+		}
+		for _, pool := range pools {
+			if pool != nil {
+				pool.SetQuota(a.ID, rem)
+			}
+		}
+		updated++
+	}
+	logger.Info("quota refresh: %d/%d accounts updated", updated, len(accounts))
 }
 
 // UnpinPools 取消所有池的手动固定，恢复会话/前缀组粘性。
@@ -550,7 +610,7 @@ func (s *Service) GetAccountQuota(accountID string) (*account.QuotaInfo, error) 
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("[SERVICE DEBUG] Quota result: user_quota=%+v, addon_quota=%+v\n", quota.UserQuota, quota.AddonQuota)
+	logger.Debug("quota result: user_quota=%+v, addon_quota=%+v", quota.UserQuota, quota.AddonQuota)
 	return quota, nil
 }
 

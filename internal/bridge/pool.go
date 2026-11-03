@@ -79,6 +79,26 @@ type Slot struct {
 	catalogMu sync.Mutex
 	catalog   map[string]bool
 	catalogAt time.Time
+
+	// 额度缓存：用于自动选号时优先选剩余额度最高的账号。
+	quotaMu        sync.Mutex
+	quotaRemaining float64
+	quotaAt        time.Time
+}
+
+// SetQuota 更新账号剩余额度缓存（由 Service 定期刷新）。
+func (s *Slot) SetQuota(remaining float64) {
+	s.quotaMu.Lock()
+	s.quotaRemaining = remaining
+	s.quotaAt = time.Now()
+	s.quotaMu.Unlock()
+}
+
+// quota 返回剩余额度与采集时间。
+func (s *Slot) quota() (float64, time.Time) {
+	s.quotaMu.Lock()
+	defer s.quotaMu.Unlock()
+	return s.quotaRemaining, s.quotaAt
 }
 
 // snapshot 返回当前会话与客户端的快照。会话可能被续期替换，读取必须走此方法。
@@ -374,12 +394,16 @@ func (p *Pool) pick(sessionKey, groupKey string, exclude map[string]struct{}, fi
 			return s, true
 		}
 	}
-	// 4) 全新会话/前缀组：随机起点（关闭粘性时保持纯轮询）
-	if poolRandIndex != nil {
-		if (sessionKey != "" || groupKey != "") && sessionAcc == "" && groupAcc == "" {
-			start = poolRandIndex(n)
-		} else if sessionKey == "" && groupKey == "" && stickyID == "" && stickyEnabled.Load() {
-			start = poolRandIndex(n)
+	// 4) 无可用绑定时：优先剩余额度最高的账号；没有额度数据再随机。
+	if stickyEnabled.Load() {
+		if idx := p.bestQuotaIndex(slots, exclude, now, filter); idx >= 0 {
+			start = idx
+		} else if poolRandIndex != nil {
+			if (sessionKey != "" || groupKey != "") && sessionAcc == "" && groupAcc == "" {
+				start = poolRandIndex(n)
+			} else if sessionKey == "" && groupKey == "" && stickyID == "" {
+				start = poolRandIndex(n)
+			}
 		}
 	}
 
@@ -433,6 +457,51 @@ func (p *Pool) NoteSessionSuccess(sessionKey, id string) {
 	if len(p.sessions) > maxSessionBindings {
 		p.pruneSessionsLocked(now)
 	}
+}
+
+// SetQuota 更新某个账号的剩余额度缓存（供自动选号排序）。
+func (p *Pool) SetQuota(id string, remaining float64) {
+	for _, s := range p.snapshot() {
+		if s.ID == id {
+			s.SetQuota(remaining)
+			return
+		}
+	}
+}
+
+// quotaFreshFor 额度缓存在该时长内才参与排序。
+const quotaFreshFor = 30 * time.Minute
+
+// bestQuotaIndex 返回剩余额度最高且可用的 slot 下标；无可用额度数据返回 -1。
+func (p *Pool) bestQuotaIndex(slots []*Slot, exclude map[string]struct{}, now time.Time, filter func(*Slot) bool) int {
+	best := -1
+	bestRem := 0.0
+	var ties []int
+	for i, s := range slots {
+		if _, skip := exclude[s.ID]; skip || !s.available(now) {
+			continue
+		}
+		if filter != nil && !filter(s) {
+			continue
+		}
+		rem, at := s.quota()
+		if at.IsZero() || now.Sub(at) > quotaFreshFor {
+			continue
+		}
+		switch {
+		case best < 0 || rem > bestRem:
+			best, bestRem, ties = i, rem, []int{i}
+		case rem == bestRem:
+			ties = append(ties, i)
+		}
+	}
+	if best < 0 {
+		return -1
+	}
+	if len(ties) > 1 && poolRandIndex != nil {
+		return ties[poolRandIndex(len(ties))]
+	}
+	return best
 }
 
 // PinAccount 手动固定账号：后续选号优先使用它（冷却/不支持模型时回退）。

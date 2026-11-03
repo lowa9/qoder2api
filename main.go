@@ -141,6 +141,9 @@ func main() {
 		logger.Info("open console and login/activate an account: http://127.0.0.1:%d", *webPort)
 	}
 
+	// 额度刷新器：自动选号按剩余额度做负载均衡
+	svc.StartQuotaRefresher(10 * time.Minute)
+
 	sub, err := fs.Sub(webAssets, "webconsole")
 	if err != nil {
 		log.Fatalf("web assets: %v", err)
