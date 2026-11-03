@@ -1146,7 +1146,7 @@ th { white-space: nowrap; }
         if ($('pickHint')) {
           const pinned = ((pool && pool.slots) || []).find(s => s.pinned);
           $('pickHint').textContent = pinned
-            ? `当前固定账号：${pinned.name}（点「自动选号」恢复会话/前缀组粘性）`
+            ? `当前固定账号：${pinned.name}（闲置 2 小时自动失效；点「自动选号」恢复会话/前缀组粘性）`
             : '自动选号：新会话优先剩余额度最高，之后会话/前缀组复用';
         }
         const accounts = await api('/api/accounts');

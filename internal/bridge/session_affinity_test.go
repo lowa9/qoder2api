@@ -264,3 +264,47 @@ func TestPoolSelectsHighestQuota(t *testing.T) {
 		t.Fatalf("after cooling b = %v, want c", s2)
 	}
 }
+
+// TestPoolPinIdleExpiry 验证手动固定闲置超过 TTL 后自动失效，
+// 回到按剩余额度选号。
+func TestPoolPinIdleExpiry(t *testing.T) {
+	SetStickyPool(true)
+	t.Cleanup(func() { SetStickyPool(true) })
+
+	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
+	p.SetQuota("a", 500)
+	p.SetQuota("b", 100)
+	p.PinAccount("b")
+	p.mu.Lock()
+	p.pinnedAt = time.Now().Add(-pinIdleTTL - time.Minute)
+	p.mu.Unlock()
+
+	s, ok := p.PickWithAffinity("new", "G", nil)
+	if !ok || s.ID != "a" {
+		t.Fatalf("expired pin pick = %v, want a (highest quota)", s)
+	}
+	for _, st := range p.Status() {
+		if st.Pinned {
+			t.Errorf("pin should be cleared after idle TTL, slot=%s", st.ID)
+		}
+	}
+}
+
+// TestPoolPinRefreshedOnSuccess 验证固定账号有成功请求时续期，不会闲置过期。
+func TestPoolPinRefreshedOnSuccess(t *testing.T) {
+	SetStickyPool(true)
+	t.Cleanup(func() { SetStickyPool(true) })
+
+	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
+	p.SetQuota("a", 500)
+	p.SetQuota("b", 100)
+	p.PinAccount("b")
+	p.mu.Lock()
+	p.pinnedAt = time.Now().Add(-pinIdleTTL - time.Minute)
+	p.mu.Unlock()
+	p.NoteSuccess("b") // 成功请求应刷新固定闲置时间
+
+	if s, ok := p.PickWithAffinity("new", "G", nil); !ok || s.ID != "b" {
+		t.Fatalf("refreshed pin pick = %v, want b", s)
+	}
+}

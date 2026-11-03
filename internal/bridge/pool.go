@@ -156,8 +156,10 @@ type Pool struct {
 	// 同一 system 的新会话（上下文压缩、续写）复用同一账号以命中缓存。
 	groups map[string]sessionBinding
 	// pinned 手动固定的账号（控制台「启用」）。优先级最高，
-	// 直到用户点「自动选号」或桥重启。
+	// 闲置超过 pinIdleTTL 后自动失效（上游缓存 TTL 实测约 30–60 分钟，
+	// 再久同账号也会冷启动，固定已无收益）。
 	pinned    string
+	pinnedAt  time.Time
 	statePath string // 非空时把冷却状态持久化到该文件（重启不丢）
 }
 
@@ -174,6 +176,9 @@ const (
 	maxSessionBindings = 1024
 	// groupBindingTTL 前缀组绑定有效期（比会话更长，覆盖压缩/续写）。
 	groupBindingTTL = 6 * time.Hour
+	// pinIdleTTL 手动固定账号的闲置有效期。实测缓存 TTL 约 30–60 分钟，
+	// 2 小时足够覆盖且不会让固定失去意义。
+	pinIdleTTL = 2 * time.Hour
 	// maxGroupBindings 前缀组绑定表上限。
 	maxGroupBindings = 256
 )
@@ -335,10 +340,17 @@ func (p *Pool) pick(sessionKey, groupKey string, exclude map[string]struct{}, fi
 	start := p.cursor
 	stickyID := p.lastSuccess
 	pinnedID := ""
+	expiredPin := ""
 	sessionAcc := ""
 	groupAcc := ""
 	if stickyEnabled.Load() {
 		pinnedID = p.pinned
+		if pinnedID != "" && !p.pinnedAt.IsZero() && now.Sub(p.pinnedAt) > pinIdleTTL {
+			expiredPin = pinnedID
+			pinnedID = ""
+			p.pinned = ""
+			p.pinnedAt = time.Time{}
+		}
 		if sessionKey != "" {
 			if b, ok := p.sessions[sessionKey]; ok && now.Sub(b.seen) < sessionBindingTTL {
 				sessionAcc = b.accountID
@@ -351,6 +363,9 @@ func (p *Pool) pick(sessionKey, groupKey string, exclude map[string]struct{}, fi
 		}
 	}
 	p.mu.Unlock()
+	if expiredPin != "" {
+		logger.Info("pool: pinned account %s expired after %s idle, back to auto", expiredPin, pinIdleTTL)
+	}
 	// 关闭粘性时退化为纯轮询：忽略会话/前缀组绑定与随机起点
 	if !stickyEnabled.Load() {
 		sessionKey, groupKey = "", ""
@@ -511,8 +526,9 @@ func (p *Pool) PinAccount(id string) {
 	}
 	p.mu.Lock()
 	p.pinned = id
+	p.pinnedAt = time.Now()
 	p.mu.Unlock()
-	logger.Info("pool: pinned account %s (manual)", id)
+	logger.Info("pool: pinned account %s (manual, idle TTL %s)", id, pinIdleTTL)
 }
 
 // UnpinAccount 取消手动固定，恢复会话/前缀组粘性。
@@ -523,6 +539,7 @@ func (p *Pool) UnpinAccount() {
 	p.mu.Lock()
 	was := p.pinned
 	p.pinned = ""
+	p.pinnedAt = time.Time{}
 	if was != "" {
 		// 清掉指向被固定账号的会话/前缀组绑定，让它们重新走随机/其他绑定
 		for k, b := range p.sessions {
@@ -603,6 +620,9 @@ func (p *Pool) NoteSuccess(id string) {
 			s.noteSuccess()
 			p.mu.Lock()
 			p.lastSuccess = id
+			if p.pinned == id {
+				p.pinnedAt = time.Now() // 有流量即续期
+			}
 			p.mu.Unlock()
 			p.save()
 			return
