@@ -289,6 +289,11 @@ access token 并回传新的 refresh_token）在过期前**主动续期**。
 
 冷启动一次后，后续同 system 的新会话直接命中，**3 次调用省约 60%**。
 
+> 注意缓存只覆盖**共享前缀**（agent 提示 + system），新任务独有的 user 内容仍会
+> 正常 prefill。长任务实测：输入 12,185 tokens，命中 10,496，未命中 1,689
+> （即新课题自己的内容），命中率 86.1%。这与 Claude/Claude Code 的 prompt
+> caching 语义一致：前缀复用 KV，后缀重新计算，不会影响模型对当前任务的理解。
+
 **实现**：
 
 - 前缀组键 = `hash(model + 首条 system 内容)`；无 system 时不分组；
