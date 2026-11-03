@@ -634,6 +634,30 @@ func deriveSessionKey(messages []interface{}) string {
 	return "msg:" + hex.EncodeToString(sum[:8])
 }
 
+// derivePrefixGroup 同一 system prompt + 模型 → 前缀组。
+// 上下文压缩/续写会改变会话键（首条 user 变了），但 system 不变；
+// 用前缀组把它们绑回同一账号以复用缓存。无 system 时返回空（不分组）。
+func derivePrefixGroup(messages []interface{}, model string) string {
+	var sys string
+	for _, it := range messages {
+		m, ok := it.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if role, _ := m["role"].(string); role == "system" {
+			sys = NormalizeMessageContent(m)
+			if sys != "" {
+				break
+			}
+		}
+	}
+	if sys == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(model + "\x00" + sys))
+	return "pfx:" + hex.EncodeToString(sum[:8])
+}
+
 // shortSession 日志展示用：只保留前缀。
 func shortSession(s string) string {
 	if len(s) > 18 {
@@ -660,6 +684,7 @@ func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages [
 	if sessionKey == "" {
 		sessionKey = deriveSessionKey(messages)
 	}
+	groupKey := derivePrefixGroup(messages, model)
 	rec := CallRecord{
 		Time:          startedAt,
 		RequestID:     meta.RequestID,
@@ -869,7 +894,7 @@ func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages [
 	tried := make(map[string]struct{})
 	var lastErr error
 	for {
-		slot, ok := b.pickSlotForModel(model, tried, sessionKey)
+		slot, ok := b.pickSlotForModel(model, tried, sessionKey, groupKey)
 		if !ok {
 			break
 		}
@@ -918,7 +943,7 @@ func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages [
 			}
 		}
 		if err == nil {
-			b.noteSlotSuccess(slot.ID, sessionKey)
+			b.noteSlotSuccess(slot.ID, sessionKey, groupKey)
 			return nil
 		}
 		lastErr = err

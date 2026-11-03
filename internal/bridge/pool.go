@@ -131,7 +131,10 @@ type Pool struct {
 	lastSuccess string // 最近一次成功调用使用的账号 id（全局粘性，无会话标识时使用）
 	// sessions 会话 -> 账号绑定。新会话随机选号，同一会话后续复用，
 	// 使多个客户端会话各自落在不同账号上并保持缓存热度。
-	sessions  map[string]sessionBinding
+	sessions map[string]sessionBinding
+	// groups 前缀组（system prompt + 模型）-> 账号绑定。
+	// 同一 system 的新会话（上下文压缩、续写）复用同一账号以命中缓存。
+	groups    map[string]sessionBinding
 	statePath string // 非空时把冷却状态持久化到该文件（重启不丢）
 }
 
@@ -146,6 +149,10 @@ const (
 	sessionBindingTTL = 2 * time.Hour
 	// maxSessionBindings 绑定表上限，超出时淘汰最久未使用的条目。
 	maxSessionBindings = 1024
+	// groupBindingTTL 前缀组绑定有效期（比会话更长，覆盖压缩/续写）。
+	groupBindingTTL = 6 * time.Hour
+	// maxGroupBindings 前缀组绑定表上限。
+	maxGroupBindings = 256
 )
 
 func NewPool(slots ...*Slot) *Pool { return &Pool{slots: slots} }
@@ -269,7 +276,7 @@ func (p *Pool) snapshot() []*Slot {
 // 可选 filter」的账号。filter 在锁外调用（允许其中做缓存/网络操作）。
 // Pick 无会话标识的选号（模型目录、控制台等场景沿用全局粘性）。
 func (p *Pool) Pick(exclude map[string]struct{}, filters ...func(*Slot) bool) (*Slot, bool) {
-	return p.pick("", exclude, filters...)
+	return p.pick("", "", exclude, filters...)
 }
 
 // PickWithSession 会话感知选号：
@@ -277,10 +284,16 @@ func (p *Pool) Pick(exclude map[string]struct{}, filters ...func(*Slot) bool) (*
 //   - 新会话/绑定失效 → 随机起点（多个会话分散到不同账号）
 //   - 会话为空时退化为原有全局粘性 + 冷启动随机
 func (p *Pool) PickWithSession(sessionKey string, exclude map[string]struct{}, filters ...func(*Slot) bool) (*Slot, bool) {
-	return p.pick(sessionKey, exclude, filters...)
+	return p.pick(sessionKey, "", exclude, filters...)
 }
 
-func (p *Pool) pick(sessionKey string, exclude map[string]struct{}, filters ...func(*Slot) bool) (*Slot, bool) {
+// PickWithAffinity 会话 + 前缀组双键选号。
+// 会话绑定优先；没有会话绑定时，相同 system 前缀（前缀组）复用同一账号。
+func (p *Pool) PickWithAffinity(sessionKey, groupKey string, exclude map[string]struct{}, filters ...func(*Slot) bool) (*Slot, bool) {
+	return p.pick(sessionKey, groupKey, exclude, filters...)
+}
+
+func (p *Pool) pick(sessionKey, groupKey string, exclude map[string]struct{}, filters ...func(*Slot) bool) (*Slot, bool) {
 	if p == nil {
 		return nil, false
 	}
@@ -299,16 +312,24 @@ func (p *Pool) pick(sessionKey string, exclude map[string]struct{}, filters ...f
 	start := p.cursor
 	stickyID := p.lastSuccess
 	sessionAcc := ""
-	if sessionKey != "" && stickyEnabled.Load() {
-		if b, ok := p.sessions[sessionKey]; ok && now.Sub(b.seen) < sessionBindingTTL {
-			sessionAcc = b.accountID
+	groupAcc := ""
+	if stickyEnabled.Load() {
+		if sessionKey != "" {
+			if b, ok := p.sessions[sessionKey]; ok && now.Sub(b.seen) < sessionBindingTTL {
+				sessionAcc = b.accountID
+			}
+		}
+		if groupKey != "" {
+			if b, ok := p.groups[groupKey]; ok && now.Sub(b.seen) < groupBindingTTL {
+				groupAcc = b.accountID
+			}
 		}
 	}
 	p.mu.Unlock()
-	// 关闭粘性时退化为纯轮询：忽略会话绑定与随机起点
+	// 关闭粘性时退化为纯轮询：忽略会话/前缀组绑定与随机起点
 	if !stickyEnabled.Load() {
-		sessionKey = ""
-		sessionAcc = ""
+		sessionKey, groupKey = "", ""
+		sessionAcc, groupAcc = "", ""
 	}
 
 	usable := func(id string) *Slot {
@@ -334,17 +355,21 @@ func (p *Pool) pick(sessionKey string, exclude map[string]struct{}, filters ...f
 	if s := usable(sessionAcc); s != nil {
 		return s, true
 	}
-	// 2) 无会话标识时才使用全局粘性（新会话应随机分散）
-	if sessionKey == "" && stickyEnabled.Load() {
+	// 2) 同一 system 前缀（压缩/续写产生的新会话）复用账号
+	if s := usable(groupAcc); s != nil {
+		return s, true
+	}
+	// 3) 无会话/前缀组标识时才使用全局粘性
+	if sessionKey == "" && groupKey == "" && stickyEnabled.Load() {
 		if s := usable(stickyID); s != nil {
 			return s, true
 		}
 	}
-	// 3) 新会话 / 粘性冷启动：随机起点（关闭粘性时保持纯轮询）
+	// 4) 全新会话/前缀组：随机起点（关闭粘性时保持纯轮询）
 	if poolRandIndex != nil {
-		if sessionKey != "" && sessionAcc == "" {
+		if (sessionKey != "" || groupKey != "") && sessionAcc == "" && groupAcc == "" {
 			start = poolRandIndex(n)
-		} else if sessionKey == "" && stickyID == "" && stickyEnabled.Load() {
+		} else if sessionKey == "" && groupKey == "" && stickyID == "" && stickyEnabled.Load() {
 			start = poolRandIndex(n)
 		}
 	}
@@ -395,6 +420,37 @@ func (p *Pool) NoteSessionSuccess(sessionKey, id string) {
 	p.sessions[sessionKey] = sessionBinding{accountID: id, seen: now}
 	if len(p.sessions) > maxSessionBindings {
 		p.pruneSessionsLocked(now)
+	}
+}
+
+// NoteGroupSuccess 记录前缀组与账号的绑定。
+func (p *Pool) NoteGroupSuccess(groupKey, id string) {
+	if p == nil || groupKey == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.groups == nil {
+		p.groups = map[string]sessionBinding{}
+	}
+	now := time.Now()
+	p.groups[groupKey] = sessionBinding{accountID: id, seen: now}
+	if len(p.groups) > maxGroupBindings {
+		for k, b := range p.groups {
+			if now.Sub(b.seen) >= groupBindingTTL {
+				delete(p.groups, k)
+			}
+		}
+		for len(p.groups) > maxGroupBindings {
+			oldestKey := ""
+			var oldest time.Time
+			for k, b := range p.groups {
+				if oldestKey == "" || b.seen.Before(oldest) {
+					oldestKey, oldest = k, b.seen
+				}
+			}
+			delete(p.groups, oldestKey)
+		}
 	}
 }
 

@@ -102,3 +102,73 @@ func TestPoolSessionAffinity(t *testing.T) {
 		t.Fatalf("session A new binding = %v, want %s", s3, s2.ID)
 	}
 }
+
+// TestDerivePrefixGroup 验证前缀组只由 system + 模型决定：
+// 同一 system 下不同 user 属于同一组，不同 system/model 不同组。
+func TestDerivePrefixGroup(t *testing.T) {
+	a := []interface{}{
+		map[string]interface{}{"role": "system", "content": "同一个系统提示"},
+		map[string]interface{}{"role": "user", "content": "任务一"},
+	}
+	b := []interface{}{
+		map[string]interface{}{"role": "system", "content": "同一个系统提示"},
+		map[string]interface{}{"role": "user", "content": "任务二"},
+	}
+	c := []interface{}{
+		map[string]interface{}{"role": "system", "content": "另一个系统提示"},
+		map[string]interface{}{"role": "user", "content": "任务一"},
+	}
+	g1 := derivePrefixGroup(a, "dfmodel")
+	if g1 == "" {
+		t.Fatal("group should not be empty with system prompt")
+	}
+	if g2 := derivePrefixGroup(b, "dfmodel"); g2 != g1 {
+		t.Errorf("same system should share group: %q vs %q", g1, g2)
+	}
+	if g3 := derivePrefixGroup(c, "dfmodel"); g3 == g1 {
+		t.Errorf("different system should differ: %q", g3)
+	}
+	if g4 := derivePrefixGroup(a, "auto"); g4 == g1 {
+		t.Errorf("different model should differ: %q", g4)
+	}
+	noSystem := []interface{}{map[string]interface{}{"role": "user", "content": "hi"}}
+	if g := derivePrefixGroup(noSystem, "dfmodel"); g != "" {
+		t.Errorf("no system should yield empty group, got %q", g)
+	}
+}
+
+// TestPoolPrefixGroupAffinity 验证同一 system 的新会话复用账号，
+// 不同 system 走新的随机起点。
+func TestPoolPrefixGroupAffinity(t *testing.T) {
+	SetStickyPool(true)
+	t.Cleanup(func() { SetStickyPool(true) })
+
+	oldRand := poolRandIndex
+	seq := []int{0, 1}
+	i := 0
+	poolRandIndex = func(n int) int {
+		v := seq[i%len(seq)]
+		i++
+		return v % n
+	}
+	t.Cleanup(func() { poolRandIndex = oldRand })
+
+	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"), testSlot(t, "c", "t"))
+
+	s1, ok := p.PickWithAffinity("sess1", "G1", nil)
+	if !ok || s1.ID != "a" {
+		t.Fatalf("first pick = %v, want a", s1)
+	}
+	p.NoteSessionSuccess("sess1", s1.ID)
+	p.NoteGroupSuccess("G1", s1.ID)
+
+	// 新会话、同前缀组 → 复用 a（不再随机）
+	if s2, _ := p.PickWithAffinity("sess2", "G1", nil); s2.ID != "a" {
+		t.Fatalf("same group pick = %v, want a", s2)
+	}
+
+	// 新前缀组 → 下一个随机起点 b
+	if s3, _ := p.PickWithAffinity("sess3", "G2", nil); s3.ID != "b" {
+		t.Fatalf("different group pick = %v, want b", s3)
+	}
+}

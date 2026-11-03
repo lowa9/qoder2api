@@ -76,10 +76,11 @@ func (b *Bridge) coolSlot(id string, d time.Duration, reason string) {
 }
 
 // noteSlotSuccess 记录成功（仅池模式下生效）。
-func (b *Bridge) noteSlotSuccess(id, sessionKey string) {
+func (b *Bridge) noteSlotSuccess(id, sessionKey, groupKey string) {
 	if b.pool != nil {
 		b.pool.NoteSuccess(id)
 		b.pool.NoteSessionSuccess(sessionKey, id)
+		b.pool.NoteGroupSuccess(groupKey, id)
 	}
 }
 
@@ -136,7 +137,7 @@ func (b *Bridge) slotSupportsModel(slot *Slot, model string) bool {
 // pickSlotForModel 按模型选号：优先选目录里有该模型的同 region 账号。
 // 兜底同样限定同 region——跨 region 会把请求派给别区账号并扣其 credits
 // （实测 8963 曾把 CN 请求派给 global 账号产生扣费）。
-func (b *Bridge) pickSlotForModel(model string, exclude map[string]struct{}, sessionKey string) (*Slot, bool) {
+func (b *Bridge) pickSlotForModel(model string, exclude map[string]struct{}, sessionKey, groupKey string) (*Slot, bool) {
 	// 本桥期望的区域：Bridge.region（单账号模式天然有值）；
 	// 池模式若 region 为空则回退到池内首个 slot。
 	wantRegion := b.region
@@ -155,7 +156,7 @@ func (b *Bridge) pickSlotForModel(model string, exclude map[string]struct{}, ses
 	if b.pool == nil {
 		return b.pickSlot(exclude)
 	}
-	slot, ok := b.pool.PickWithSession(sessionKey, exclude, func(s *Slot) bool {
+	slot, ok := b.pool.PickWithAffinity(sessionKey, groupKey, exclude, func(s *Slot) bool {
 		if !sameRegion(s) {
 			return false
 		}
@@ -167,7 +168,7 @@ func (b *Bridge) pickSlotForModel(model string, exclude map[string]struct{}, ses
 		return slot, true
 	}
 	// 池内同 region 账号目录均不含该模型：仍在同 region 内兜底。
-	slot, ok = b.pool.PickWithSession(sessionKey, exclude, sameRegion)
+	slot, ok = b.pool.PickWithAffinity(sessionKey, groupKey, exclude, sameRegion)
 	if ok {
 		b.ensureSlotFresh(slot)
 	}
