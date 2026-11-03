@@ -44,7 +44,7 @@ func TestCallLogRecordsSuccess(t *testing.T) {
 	defer srv.Close()
 
 	b := envelopeBridge(t, srv.URL)
-	ctx := WithCallMeta(context.Background(), CallMeta{RequestID: "abcd1234", Protocol: "chat", Stream: true})
+	ctx := WithCallMeta(context.Background(), CallMeta{RequestID: "abcd1234", Protocol: "chat", Stream: true, SessionKey: "conv:test-session"})
 
 	if err := b.CallQoderWithOpts(ctx, "codex", testMessages(), "claude-sonnet-4-6", nil, CallOpts{}, func(Delta) {}); err != nil {
 		t.Fatalf("CallQoderWithOpts: %v", err)
@@ -57,6 +57,9 @@ func TestCallLogRecordsSuccess(t *testing.T) {
 	rec := calls[0]
 	if rec.Status != CallStatusOK {
 		t.Errorf("status = %q, want ok", rec.Status)
+	}
+	if rec.SessionKey != "conv:test-session" {
+		t.Errorf("session key = %q, want conv:test-session", rec.SessionKey)
 	}
 	if rec.Protocol != "chat" || rec.RequestID != "abcd1234" {
 		t.Errorf("meta = protocol %q req %q, want chat/abcd1234", rec.Protocol, rec.RequestID)

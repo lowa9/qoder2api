@@ -663,6 +663,7 @@ func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages [
 	rec := CallRecord{
 		Time:          startedAt,
 		RequestID:     meta.RequestID,
+		SessionKey:    sessionKey,
 		Protocol:      meta.Protocol,
 		Agent:         agent,
 		Model:         originalModel,

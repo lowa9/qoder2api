@@ -68,7 +68,7 @@ a { color: var(--accent); }
   position: sticky; top: 0; z-index: 5;
 }
 .topbar h1 { font-size: 17px; margin: 0; }
-main { padding: 20px 24px 40px; width: 100%; max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+main { padding: 20px 24px 40px; width: 100%; max-width: none; margin: 0; display: flex; flex-direction: column; gap: 16px; }
 
 /* ── 卡片与通用控件 ───────────────────────────────────────────────── */
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; box-shadow: var(--shadow); }
@@ -105,6 +105,12 @@ pre {
   padding: 12px; border: 1px solid var(--line);
 }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+#callsBox, #creditBox { overflow-x: auto; }
+#callsBox table { table-layout: fixed; width: 100%; min-width: 1180px; }
+th { white-space: nowrap; }
+.cell-status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cell-session { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cell-preview { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
 .kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
 .kpi { background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: 10px; padding: 10px 12px; }
 .kpi .v { font-size: 17px; font-weight: 650; font-family: var(--mono); font-variant-numeric: tabular-nums; }
@@ -598,6 +604,14 @@ pre {
       return m > 0 ? m + 'm' + String(r).padStart(2, '0') + 's' : r + 's';
     }
 
+    // 调用日志时间：带日期（月-日 时:分:秒），跨天时不混淆
+    function fmtCallTime(iso) {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return String(iso || '');
+      const p = (n) => String(n).padStart(2, '0');
+      return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    }
+
     function fmtNum(n) {
       if (n == null || Number.isNaN(n)) return '-';
       return Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 });
@@ -904,8 +918,8 @@ pre {
 
     function callStatusBadge(r) {
       if (r.status === 'ok') return '<span style="color:var(--ok,#16a34a);font-weight:600">✅ OK</span>';
-      if (r.status === 'cancelled') return '<span style="color:var(--muted)">🚫 客户端断开</span>';
-      return `<span style="color:var(--bad,#dc2626);font-weight:600">⚠️ ${esc(r.error_type || 'error')}</span>`;
+      if (r.status === 'cancelled') return '<span style="color:var(--muted)" title="客户端断开">🚫 断开</span>';
+      return `<span style="color:var(--bad,#dc2626);font-weight:600" title="${esc(r.error_type || 'error')}">⚠️ 错误</span>`;
     }
 
     function renderCalls() {
@@ -934,7 +948,7 @@ pre {
         return;
       }
       const body = rows.map(r => {
-        const t = new Date(r.time).toLocaleTimeString();
+        const t = fmtCallTime(r.time);
         const clientName = modelLabel(r.model);
         const upstreamName = modelLabel(r.upstream_model);
         const model = (r.upstream_model && r.upstream_model !== r.model)
@@ -945,7 +959,7 @@ pre {
         // 仅在既不同于映射值、又不是 "auto" 时展示。
         const remote = (r.remote_model && r.remote_model !== r.upstream_model && r.remote_model !== 'auto')
           ? `<div class="muted" style="font-size:11px;margin-top:2px">上游实际：${esc(r.remote_model)}</div>` : '';
-        const acct = r.account
+        const acctBase = r.account
           ? `${esc(r.account)} <span class="muted">(${esc(r.region || '-')})</span>`
           : '<span class="muted">未分配</span>';
         const tok = (r.input_tokens || r.output_tokens)
@@ -967,32 +981,41 @@ pre {
           r.had_tool_calls ? '↩工具' : '',
           r.attempts > 1 ? `⟳换号${r.attempts - 1}` : '',
         ].filter(Boolean).join(' ');
+        const acct = acctBase + (flags ? `<div class="muted" style="font-size:11px;margin-top:2px">${esc(flags)}</div>` : '');
         const preview = r.prompt_preview ? `<div class="muted" style="margin-top:2px">${esc(r.prompt_preview)}</div>` : '';
+        const sk = (r.session_key || '').replace(/^(conv|meta|msg):/, '');
+        const sessionCell = sk
+          ? `<span class="muted" title="${esc(r.session_key)}">${esc(sk.slice(0, 10))}</span>`
+          : '<span class="muted">-</span>';
         const err = (r.status !== 'ok' && r.error_message)
           ? `<div style="color:var(--bad,#dc2626);margin-top:2px">${esc(r.error_message)}</div>` : '';
         return `<tr style="border-top:1px solid #0001;vertical-align:top">` +
           `<td style="white-space:nowrap">${t}</td>` +
-          `<td>${callStatusBadge(r)}</td>` +
+          `<td class="cell-status">${callStatusBadge(r)}</td>` +
           `<td>${esc(r.protocol || '-')}</td>` +
           `<td>${model}${remote}</td>` +
           `<td>${acct}</td>` +
-          `<td style="white-space:nowrap">${esc(flags)}</td>` +
           `<td style="text-align:right;white-space:nowrap">${tok}</td>` +
           `<td style="text-align:right;white-space:nowrap">${cache}</td>` +
           `<td style="text-align:right;white-space:nowrap">${credit}</td>` +
           `<td style="text-align:right;white-space:nowrap">${r.duration_ms}ms</td>` +
           `<td style="text-align:right;white-space:nowrap">${ttft}</td>` +
           `<td style="text-align:right;white-space:nowrap">${speed}</td>` +
-          `<td style="min-width:180px">${preview}${err}</td>` +
+          `<td class="cell-session">${sessionCell}</td>` +
+          `<td class="cell-preview">${preview}${err}</td>` +
           `</tr>`;
       }).join('');
       box.innerHTML = `<table style="width:100%;border-collapse:collapse">` +
+        `<colgroup><col style="width:104px"><col style="width:74px"><col style="width:46px">` +
+        `<col style="width:118px"><col style="width:136px"><col style="width:88px"><col style="width:92px">` +
+        `<col style="width:74px"><col style="width:84px"><col style="width:64px"><col style="width:62px">` +
+        `<col style="width:78px"><col></colgroup>` +
         `<thead><tr style="text-align:left;color:var(--muted)">` +
         `<th>时间</th><th>状态</th><th>协议</th><th>模型</th><th>账号</th>` +
-        `<th>模式</th><th style="text-align:right">Token(入/出)</th>` +
+        `<th style="text-align:right">Token(入/出)</th>` +
         `<th style="text-align:right">缓存命中</th><th style="text-align:right">Credits</th>` +
         `<th style="text-align:right">耗时</th><th style="text-align:right">首字</th>` +
-        `<th style="text-align:right">速度</th><th>请求预览</th></tr></thead>` +
+        `<th style="text-align:right">速度</th><th>会话</th><th>请求预览</th></tr></thead>` +
         `<tbody>${body}</tbody></table>`;
     }
 

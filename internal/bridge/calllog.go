@@ -24,12 +24,13 @@ import (
 // 控制台可清空，清空后从该时刻重新累积。
 type CallRecord struct {
 	Seq           int       `json:"seq"`
-	Time          time.Time `json:"time"`           // 请求开始时间
-	RequestID     string    `json:"request_id"`     // 与原始日志 [Chat][xxxx] 对应的短 id
-	Protocol      string    `json:"protocol"`       // chat | claude | codex
-	Agent         string    `json:"agent"`          // claude | codex | gemini
-	Model         string    `json:"model"`          // 客户端请求的模型名
-	UpstreamModel string    `json:"upstream_model"` // 映射后的上游 model.key
+	Time          time.Time `json:"time"`                  // 请求开始时间
+	RequestID     string    `json:"request_id"`            // 与原始日志 [Chat][xxxx] 对应的短 id
+	SessionKey    string    `json:"session_key,omitempty"` // 会话标识（用于账号粘性与排查）
+	Protocol      string    `json:"protocol"`              // chat | claude | codex
+	Agent         string    `json:"agent"`                 // claude | codex | gemini
+	Model         string    `json:"model"`                 // 客户端请求的模型名
+	UpstreamModel string    `json:"upstream_model"`        // 映射后的上游 model.key
 	// RemoteModel 上游帧回报的实际模型名（若上游提供）。auto 等路由模型
 	// 若更换底层模型，这里会变化，且前缀缓存随之失效。
 	RemoteModel     string  `json:"remote_model,omitempty"`
