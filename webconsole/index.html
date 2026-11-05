@@ -106,10 +106,9 @@ pre {
 }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 #callsBox, #creditBox { overflow-x: auto; }
-#callsBox table { table-layout: fixed; width: 100%; min-width: 1180px; }
+#callsBox table { table-layout: fixed; width: 100%; min-width: 1100px; }
 th { white-space: nowrap; }
-.cell-status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cell-session, .cell-ip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cell-status, .cell-num, .cell-perf, .cell-src { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cell-preview { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
 .kpi { background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: 10px; padding: 10px 12px; }
@@ -992,13 +991,11 @@ th { white-space: nowrap; }
         const tok = (r.input_tokens || r.output_tokens)
           ? `${fmtNum(r.input_tokens || 0)} / ${fmtNum(r.output_tokens || 0)}` : '-';
         // 缓存命中：cached_tokens / prompt_tokens；上游按固定前缀缓存，命中率高=省 credit
-        const cache = (r.cached_tokens && r.input_tokens)
-          ? `${(r.cached_tokens / r.input_tokens * 100).toFixed(1)}% <span class="muted">(${fmtNum(r.cached_tokens)})</span>`
-          : '<span class="muted">-</span>';
-        const ttft = (r.ttft_ms > 0)
-          ? `${r.ttft_ms}ms` : '<span class="muted">-</span>';
-        const speed = (r.tokens_per_sec > 0)
-          ? `${r.tokens_per_sec.toFixed(1)} t/s` : '<span class="muted">-</span>';
+        const cacheText = (r.cached_tokens && r.input_tokens)
+          ? `${(r.cached_tokens / r.input_tokens * 100).toFixed(1)}% (${fmtNum(r.cached_tokens)})`
+          : '-';
+        const ttftText = r.ttft_ms > 0 ? `${r.ttft_ms}ms` : '-';
+        const speedText = r.tokens_per_sec > 0 ? `${r.tokens_per_sec.toFixed(1)} t/s` : '-';
         const credit = (r.credits != null)
           ? `${r.credits.toFixed(4)}${(r.original_credits && r.original_credits > r.credits) ? ` <span class="muted">原 ${r.original_credits.toFixed(4)}</span>` : ''}`
           : '-';
@@ -1024,28 +1021,21 @@ th { white-space: nowrap; }
           `<td class="cell-status">${callStatusBadge(r)}</td>` +
           `<td>${model}${remote}${proto}</td>` +
           `<td>${acct}</td>` +
-          `<td style="text-align:right;white-space:nowrap">${tok}</td>` +
-          `<td style="text-align:right;white-space:nowrap">${cache}</td>` +
-          `<td style="text-align:right;white-space:nowrap">${credit}</td>` +
-          `<td style="text-align:right;white-space:nowrap">${r.duration_ms}ms</td>` +
-          `<td style="text-align:right;white-space:nowrap">${ttft}</td>` +
-          `<td style="text-align:right;white-space:nowrap">${speed}</td>` +
-          `<td class="cell-session">${sessionCell}</td>` +
-          `<td class="cell-ip">${esc(r.client_ip || '-')}</td>` +
+          `<td class="cell-num"><div>${tok}</div><div class="muted" style="font-size:11px">缓存 ${esc(cacheText)}</div></td>` +
+          `<td class="cell-num" style="text-align:right">${credit}</td>` +
+          `<td class="cell-perf"><div>${r.duration_ms}ms</div><div class="muted" style="font-size:11px">首字 ${ttftText} · ${speedText}</div></td>` +
+          `<td class="cell-src">${sessionCell}<div class="muted" style="font-size:11px;overflow:hidden;text-overflow:ellipsis" title="${esc(r.client_ip || '-')}">${esc(r.client_ip || '-')}</div></td>` +
           `<td class="cell-preview">${preview}${err}</td>` +
           `</tr>`;
       }).join('');
       box.innerHTML = `<table style="width:100%;border-collapse:collapse">` +
-        `<colgroup><col style="width:90px"><col style="width:64px">` +
-        `<col style="width:96px"><col style="width:110px"><col style="width:92px"><col style="width:104px">` +
-        `<col style="width:68px"><col style="width:66px"><col style="width:54px"><col style="width:54px">` +
-        `<col style="width:68px"><col style="width:96px"><col></colgroup>` +
+        `<colgroup><col style="width:104px"><col style="width:66px"><col style="width:118px">` +
+        `<col style="width:132px"><col style="width:150px"><col style="width:84px">` +
+        `<col style="width:150px"><col style="width:150px"><col></colgroup>` +
         `<thead><tr style="text-align:left;color:var(--muted)">` +
         `<th>时间</th><th>状态</th><th>模型</th><th>账号</th>` +
-        `<th style="text-align:right">Token(入/出)</th>` +
-        `<th style="text-align:right">缓存命中</th><th style="text-align:right">Credits</th>` +
-        `<th style="text-align:right">耗时</th><th style="text-align:right">首字</th>` +
-        `<th style="text-align:right">速度</th><th>会话</th><th>来源</th><th>请求预览</th></tr></thead>` +
+        `<th>Token / 缓存</th><th style="text-align:right">Credits</th>` +
+        `<th>性能</th><th>会话 / 来源</th><th>请求预览</th></tr></thead>` +
         `<tbody>${body}</tbody></table>`;
     }
 
