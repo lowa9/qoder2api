@@ -109,8 +109,8 @@ pre {
 #callsBox table { table-layout: fixed; width: 100%; min-width: 1180px; }
 th { white-space: nowrap; }
 .cell-status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cell-session { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cell-preview { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+.cell-session, .cell-ip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cell-preview { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
 .kpi { background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: 10px; padding: 10px 12px; }
 .kpi .v { font-size: 17px; font-weight: 650; font-family: var(--mono); font-variant-numeric: tabular-nums; }
@@ -980,6 +980,7 @@ th { white-space: nowrap; }
         const model = (r.upstream_model && r.upstream_model !== r.model)
           ? `<span title="${esc(r.model)} → ${esc(r.upstream_model)}">${esc(clientName)} <span class="muted">→ ${esc(upstreamName)}</span></span>`
           : `<span title="${esc(r.upstream_model || '')}">${esc(clientName)}</span>`;
+        const proto = r.protocol ? `<div class="muted" style="font-size:11px">${esc(r.protocol)}</div>` : '';
         // auto 等路由模型：显示上游回报的实际模型，便于确认是否换模型。
         // 实测上游对显式模型（dfmodel/qfmodel）也回显 "auto"，该值不可信，
         // 仅在既不同于映射值、又不是 "auto" 时展示。
@@ -1008,18 +1009,20 @@ th { white-space: nowrap; }
           r.attempts > 1 ? `⟳换号${r.attempts - 1}` : '',
         ].filter(Boolean).join(' ');
         const acct = acctBase + (flags ? `<div class="muted" style="font-size:11px;margin-top:2px">${esc(flags)}</div>` : '');
-        const preview = r.prompt_preview ? `<div class="muted" style="margin-top:2px">${esc(r.prompt_preview)}</div>` : '';
+        const pv = r.prompt_preview || '';
+        const pvShort = pv.length > 30 ? pv.slice(0, 30) + '…' : pv;
+        const preview = pv ? `<span class="muted" title="${esc(pv)}">${esc(pvShort)}</span>` : '';
         const sk = (r.session_key || '').replace(/^(conv|meta|msg):/, '');
         const sessionCell = sk
           ? `<span class="muted" title="${esc(r.session_key)}">${esc(sk.slice(0, 10))}</span>`
           : '<span class="muted">-</span>';
-        const err = (r.status !== 'ok' && r.error_message)
-          ? `<div style="color:var(--bad,#dc2626);margin-top:2px">${esc(r.error_message)}</div>` : '';
+        const em = r.error_message || '';
+        const err = (r.status !== 'ok' && em)
+          ? `<div style="color:var(--bad,#dc2626);margin-top:2px" title="${esc(em)}">${esc(em.length > 40 ? em.slice(0, 40) + '…' : em)}</div>` : '';
         return `<tr style="border-top:1px solid #0001;vertical-align:top">` +
           `<td style="white-space:nowrap">${t}</td>` +
           `<td class="cell-status">${callStatusBadge(r)}</td>` +
-          `<td>${esc(r.protocol || '-')}</td>` +
-          `<td>${model}${remote}</td>` +
+          `<td>${model}${remote}${proto}</td>` +
           `<td>${acct}</td>` +
           `<td style="text-align:right;white-space:nowrap">${tok}</td>` +
           `<td style="text-align:right;white-space:nowrap">${cache}</td>` +
@@ -1028,20 +1031,21 @@ th { white-space: nowrap; }
           `<td style="text-align:right;white-space:nowrap">${ttft}</td>` +
           `<td style="text-align:right;white-space:nowrap">${speed}</td>` +
           `<td class="cell-session">${sessionCell}</td>` +
+          `<td class="cell-ip">${esc(r.client_ip || '-')}</td>` +
           `<td class="cell-preview">${preview}${err}</td>` +
           `</tr>`;
       }).join('');
       box.innerHTML = `<table style="width:100%;border-collapse:collapse">` +
-        `<colgroup><col style="width:104px"><col style="width:74px"><col style="width:46px">` +
-        `<col style="width:118px"><col style="width:136px"><col style="width:88px"><col style="width:92px">` +
-        `<col style="width:74px"><col style="width:84px"><col style="width:64px"><col style="width:62px">` +
-        `<col style="width:78px"><col></colgroup>` +
+        `<colgroup><col style="width:90px"><col style="width:64px">` +
+        `<col style="width:96px"><col style="width:110px"><col style="width:92px"><col style="width:104px">` +
+        `<col style="width:68px"><col style="width:66px"><col style="width:54px"><col style="width:54px">` +
+        `<col style="width:68px"><col style="width:96px"><col></colgroup>` +
         `<thead><tr style="text-align:left;color:var(--muted)">` +
-        `<th>时间</th><th>状态</th><th>协议</th><th>模型</th><th>账号</th>` +
+        `<th>时间</th><th>状态</th><th>模型</th><th>账号</th>` +
         `<th style="text-align:right">Token(入/出)</th>` +
         `<th style="text-align:right">缓存命中</th><th style="text-align:right">Credits</th>` +
         `<th style="text-align:right">耗时</th><th style="text-align:right">首字</th>` +
-        `<th style="text-align:right">速度</th><th>会话</th><th>请求预览</th></tr></thead>` +
+        `<th style="text-align:right">速度</th><th>会话</th><th>来源</th><th>请求预览</th></tr></thead>` +
         `<tbody>${body}</tbody></table>`;
     }
 

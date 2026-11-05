@@ -704,6 +704,7 @@ func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages [
 		Time:          startedAt,
 		RequestID:     meta.RequestID,
 		SessionKey:    sessionKey,
+		ClientIP:      meta.ClientIP,
 		Protocol:      meta.Protocol,
 		Agent:         agent,
 		Model:         originalModel,

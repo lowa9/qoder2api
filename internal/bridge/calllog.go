@@ -27,6 +27,7 @@ type CallRecord struct {
 	Time          time.Time `json:"time"`                  // 请求开始时间
 	RequestID     string    `json:"request_id"`            // 与原始日志 [Chat][xxxx] 对应的短 id
 	SessionKey    string    `json:"session_key,omitempty"` // 会话标识（用于账号粘性与排查）
+	ClientIP      string    `json:"client_ip,omitempty"`   // 调用来源 IP（本地/反代已归一）
 	Protocol      string    `json:"protocol"`              // chat | claude | codex
 	Agent         string    `json:"agent"`                 // claude | codex | gemini
 	Model         string    `json:"model"`                 // 客户端请求的模型名
@@ -80,6 +81,8 @@ type CallMeta struct {
 	// SessionKey 客户端会话标识（metadata/conversation id 或消息前缀哈希）。
 	// 用于会话级账号粘性：新会话随机选号，同会话后续复用同一账号。
 	SessionKey string
+	// ClientIP 调用来源 IP（由 handler 从请求中解析）。
+	ClientIP string
 }
 
 type callMetaKey struct{}
