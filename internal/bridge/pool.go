@@ -198,9 +198,9 @@ type groupBinding struct {
 
 const (
 	// affinityIdleTTL 会话 / 前缀组 / 手动固定的统一闲置有效期。
-	// dfmodel 实测：全新前缀 +7.6h / +12h / +18h / +24h 均 98% 命中。
-	// 取最后确认命中 + 1 小时余量 = 25 小时；+30h 检查点仍在继续。
-	affinityIdleTTL = 25 * time.Hour
+	// dfmodel 实测：全新前缀 +7.6h / +12h / +18h / +24h / +30h 均 98% 命中。
+	// 取最后确认命中 + 1 小时余量 = 31 小时；更长的 48/72h 探针仍在继续。
+	affinityIdleTTL = 31 * time.Hour
 	// sessionBindingTTL 会话绑定的闲置有效期；超过后视为新会话重新选号。
 	sessionBindingTTL = affinityIdleTTL
 	// groupBindingTTL 前缀组（model + system）绑定有效期，与会话/固定一致。
