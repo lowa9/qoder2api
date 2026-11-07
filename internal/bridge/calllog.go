@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -41,7 +43,7 @@ type CallRecord struct {
 	Stream          bool    `json:"stream"`         // 客户端是否要求流式
 	Messages        int     `json:"messages"`       // 消息条数（上游请求体）
 	Tools           bool    `json:"tools"`          // 是否携带工具定义
-	PromptPreview   string  `json:"prompt_preview"` // 最后一条 user 输入的前 N 个字符
+	PromptPreview   string  `json:"prompt_preview"` // 可读的请求预览（已剥离提醒/transcript 包装）
 	Attempts        int     `json:"attempts"`       // 实际尝试过的账号数（>1 表示发生换号）
 	Status          string  `json:"status"`         // ok | error | cancelled
 	ErrorType       string  `json:"error_type,omitempty"`
@@ -252,4 +254,100 @@ func truncateRunesForLog(s string, max int) string {
 	}
 	r := []rune(s)
 	return string(r[:max]) + "…"
+}
+
+var (
+	transcriptUserFieldRE = regexp.MustCompile(`(?s)"user"\s*:\s*"((?:\\.|[^"\\])*)"`)
+	transcriptTagRE       = regexp.MustCompile(`(?s)</?transcript>`)
+	commandTagRE          = regexp.MustCompile(`(?s)<command-(?:name|message|args)>.*?</command-(?:name|message|args)>`)
+	localCommandRE        = regexp.MustCompile(`(?s)<local-command-[a-z]+>.*?</local-command-[a-z]+>`)
+)
+
+// cleanPreviewText 把客户端包装成 <transcript> / <system-reminder> / 斜杠命令的
+// 文本还原成人类可读的内容。空字符串表示这条消息没有可展示的真实文本。
+func cleanPreviewText(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return ""
+	}
+	if m := transcriptUserFieldRE.FindStringSubmatch(s); len(m) > 1 {
+		if u, err := strconv.Unquote(`"` + m[1] + `"`); err == nil {
+			s = u
+		}
+	}
+	s = systemReminderPattern.ReplaceAllString(s, "")
+	s = transcriptTagRE.ReplaceAllString(s, "")
+	s = commandTagRE.ReplaceAllString(s, "")
+	s = localCommandRE.ReplaceAllString(s, "")
+	s = strings.Join(strings.Fields(s), " ")
+	return strings.TrimSpace(s)
+}
+
+// messageText 取消息的可读文本：user 消息在 Qoder body 里通常是
+// content="" + contents=[{type:text,...}]，不能只读 content。
+func messageText(m map[string]interface{}) string {
+	if s := NormalizeMessageContent(m); s != "" {
+		return s
+	}
+	contents, ok := m["contents"].([]interface{})
+	if !ok {
+		return ""
+	}
+	var parts []string
+	for _, b := range contents {
+		bm, ok := b.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if t, ok := bm["text"].(string); ok && strings.TrimSpace(t) != "" {
+			parts = append(parts, t)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// callPreview 生成调用日志里的「请求预览」：优先最近的真实用户输入，
+// 其次助手文本，最后工具结果首行。避免整列都是 <transcript>/<system-reminder>。
+func callPreview(messages []interface{}, max int) string {
+	var firstUser, lastUser, lastAssistant, lastTool string
+	for _, it := range messages {
+		m, ok := it.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		role, _ := m["role"].(string)
+		raw := messageText(m)
+		switch role {
+		case "user":
+			if t := cleanPreviewText(raw); t != "" {
+				if firstUser == "" {
+					firstUser = t
+				}
+				lastUser = t
+			}
+		case "assistant":
+			if t := cleanPreviewText(raw); t != "" {
+				lastAssistant = t
+			}
+		case "tool":
+			// 先取工具结果首行再做清理，避免 cleanPreviewText 把换行折叠掉。
+			raw = strings.TrimLeft(raw, "\r\n \t")
+			if i := strings.IndexByte(raw, '\n'); i >= 0 {
+				raw = raw[:i]
+			}
+			if t := cleanPreviewText(raw); t != "" {
+				lastTool = t
+			}
+		}
+	}
+	pick := lastUser
+	if pick == "" {
+		pick = lastAssistant
+	}
+	if pick == "" {
+		pick = lastTool
+	}
+	if pick == "" {
+		pick = firstUser
+	}
+	return truncateRunesForLog(pick, max)
 }

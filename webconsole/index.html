@@ -659,6 +659,23 @@ th { white-space: nowrap; }
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
+    // 调用日志的历史记录可能保存了客户端原始包装（transcript / reminder），
+    // 展示时再清洗一次；新记录在服务端已经清洗过。
+    function cleanPromptPreview(s) {
+      if (!s) return '';
+      let t = String(s);
+      const m = t.match(/"user"\s*:\s*"((?:\\.|[^"\\])*)"/);
+      if (m) {
+        try { t = JSON.parse('"' + m[1] + '"'); } catch (_) {}
+      }
+      t = t.replace(/<\/?transcript>/gi, ' ');
+      t = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, ' ');
+      t = t.replace(/<command-(?:name|message|args)>[\s\S]*?<\/command-(?:name|message|args)>/gi, ' ');
+      t = t.replace(/<local-command-[a-z]+>[\s\S]*?<\/local-command-[a-z]+>/gi, ' ');
+      t = t.replace(/<[^>]+>/g, ' ');
+      return t.replace(/\s+/g, ' ').trim();
+    }
+
     function renderQuota(q) {
       
       if (!q) {
@@ -1026,7 +1043,7 @@ th { white-space: nowrap; }
           r.attempts > 1 ? `⟳换号${r.attempts - 1}` : '',
         ].filter(Boolean).join(' ');
         const acct = acctBase + (flags ? `<div class="muted" style="font-size:11px;margin-top:2px">${esc(flags)}</div>` : '');
-        const pv = r.prompt_preview || '';
+        const pv = cleanPromptPreview(r.prompt_preview || '');
         const pvShort = pv.length > 30 ? pv.slice(0, 30) + '…' : pv;
         const preview = pv ? `<span class="muted" title="${esc(pv)}">${esc(pvShort)}</span>` : '';
         const sk = (r.session_key || '').replace(/^(conv|meta|msg):/, '');

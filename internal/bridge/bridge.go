@@ -919,11 +919,11 @@ func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages [
 		"x-model-source": mcSource,
 	}
 
-	preview := prompt
-	if len(prompt) > 80 {
-		preview = preview[:80] + "..."
+	preview := callPreview(messages, 80)
+	if preview == "" {
+		preview = "-"
 	}
-	rec.PromptPreview = truncateRunesForLog(prompt, 160)
+	rec.PromptPreview = callPreview(messages, 200)
 	logger.Info("callQoder region=%s model=%s prompt=%s", b.region, model, preview)
 
 	// ---- 账号池选号 + 失败换号 -------------------------------------------

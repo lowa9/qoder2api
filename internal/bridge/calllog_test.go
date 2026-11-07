@@ -260,3 +260,76 @@ func TestCallLogTTFTAndSpeed(t *testing.T) {
 		t.Errorf("tokens/sec = %.1f, outside sane range", rec.TokensPerSec)
 	}
 }
+
+// TestCallPreviewStripsWrappers 预览应跳过提醒/transcript 包装，显示真实内容。
+func TestCallPreviewStripsWrappers(t *testing.T) {
+	cases := []struct {
+		name string
+		msgs []interface{}
+		want string
+	}{
+		{
+			name: "transcript user field",
+			msgs: []interface{}{
+				map[string]interface{}{"role": "system", "content": "sys"},
+				map[string]interface{}{"role": "user", "content": "<system-reminder>Attribution for git commits and pull requests you create</system-reminder>"},
+				map[string]interface{}{"role": "user", "content": `<transcript> {"user":"Fix the login bug"} </transcript>`},
+				map[string]interface{}{"role": "assistant", "content": "working"},
+				map[string]interface{}{"role": "tool", "content": "ok\nmore"},
+			},
+			want: "Fix the login bug",
+		},
+		{
+			name: "reminder only falls back to assistant",
+			msgs: []interface{}{
+				map[string]interface{}{"role": "user", "content": "<system-reminder>Attribution for git commits</system-reminder>"},
+				map[string]interface{}{"role": "assistant", "content": "已定位问题"},
+			},
+			want: "已定位问题",
+		},
+		{
+			name: "slash command wrapper skips to previous task",
+			msgs: []interface{}{
+				map[string]interface{}{"role": "user", "content": "真实任务"},
+				map[string]interface{}{"role": "user", "content": `<transcript> {"user":"<command-name>/model</command-name>\n<command-message>model</command-message>"} </transcript>`},
+			},
+			want: "真实任务",
+		},
+		{
+			name: "tool result first line",
+			msgs: []interface{}{
+				map[string]interface{}{"role": "tool", "content": "line one\nline two"},
+			},
+			want: "line one",
+		},
+		{
+			name: "nothing readable",
+			msgs: []interface{}{
+				map[string]interface{}{"role": "system", "content": "sys"},
+				map[string]interface{}{"role": "user", "content": "<system-reminder>only a reminder</system-reminder>"},
+			},
+			want: "",
+		},
+	}
+	for _, c := range cases {
+		if got := callPreview(c.msgs, 200); got != c.want {
+			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// TestCallPreviewQoderUserShape user 消息在 Qoder body 里是 content="" + contents。
+func TestCallPreviewQoderUserShape(t *testing.T) {
+	msgs := []interface{}{
+		map[string]interface{}{
+			"role":    "user",
+			"content": "",
+			"contents": []interface{}{
+				map[string]interface{}{"type": "text", "text": `<transcript> {"user":"Fix the login bug"} </transcript>`},
+			},
+		},
+	}
+	if got := callPreview(msgs, 200); got != "Fix the login bug" {
+		t.Errorf("got %q, want Fix the login bug", got)
+	}
+}
