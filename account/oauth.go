@@ -346,14 +346,22 @@ func extractOrgResourcePackage(data map[string]interface{}) *OrgResourcePackage 
 	if !ok || len(obj) == 0 {
 		return nil
 	}
-	return &OrgResourcePackage{
-		Cap:        toFloat(obj, "cap"),
+	cap := toFloat(obj, "cap")
+	pkg := &OrgResourcePackage{
+		Cap:        cap,
 		Used:       toFloat(obj, "used"),
 		Remaining:  toFloat(obj, "remaining"),
 		Percentage: toFloat(obj, "percentage"),
 		Unit:       stringOf(obj, "unit"),
 		Available:  obj["available"] == true,
 	}
+	// cap<0 是上游「无可用共享包」的占位值（常见的 -1），此时 remaining
+	// 仍是全组织池的总量，不能当成该账号可用的额度，否则会把它误判为
+	// 还有额度、反复选中后撞 403。
+	if pkg.Cap < 0 {
+		pkg.Available = false
+	}
+	return pkg
 }
 
 // extractDedicatedPackages 解析上游 dedicatedResourcePackages 数组。

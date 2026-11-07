@@ -735,18 +735,21 @@ th { white-space: nowrap; }
         const u = org.used || 0;
         const t = org.cap || 0;              // 注意：总量字段是 cap，不是 total
         const r = org.remaining != null ? org.remaining : (t - u);
-        const unlimited = !(t > 0);          // cap <= 0 表示不限上限（上游常见 -1）
-        const pct = unlimited ? 0 : Math.min(100, Math.round((u / t) * 100));
+        const noPackage = t < 0;             // cap<0 是上游占位值，不代表可用额度
+        const unlimited = t === 0;           // cap=0 表示不限上限
+        const pct = (noPackage || unlimited) ? 0 : Math.min(100, Math.round((u / t) * 100));
         const cls = pct >= 90 ? 'bad' : (pct >= 70 ? 'warn' : '');
         const state = org.available ? '' : ' <span class="muted">（当前不可用）</span>';
-        const amount = unlimited
-          ? `已用 ${fmtNum(u)} · 剩余 ${fmtNum(r)}${org.unit ? ' ' + org.unit : ''} <span class="muted">（不限上限）</span>`
-          : `已用 ${fmtNum(u)} / ${fmtNum(t)} · 剩余 ${fmtNum(r)}${org.unit ? ' ' + org.unit : ''}`;
+        const amount = noPackage
+          ? `<span class="muted">无可用组织共享包（上游占位 cap=${fmtNum(t)}）</span>`
+          : (unlimited
+            ? `已用 ${fmtNum(u)} · 剩余 ${fmtNum(r)}${org.unit ? ' ' + org.unit : ''} <span class="muted">（不限上限）</span>`
+            : `已用 ${fmtNum(u)} / ${fmtNum(t)} · 剩余 ${fmtNum(r)}${org.unit ? ' ' + org.unit : ''}`);
         html += `
           <div class="quota-block addon-block">
             <strong>🏢 组织共享流量包</strong>${state}:
             ${amount}<br/>
-            ${unlimited ? '' : `<div class="bar ${cls}"><i style="width:${pct}%"></i></div>`}
+            ${(noPackage || unlimited) ? '' : `<div class="bar ${cls}"><i style="width:${pct}%"></i></div>`}
           </div>
         `;
       }

@@ -44,6 +44,28 @@ func TestPoolPickSkipsCooling(t *testing.T) {
 	}
 }
 
+// TestSlotHasQuotaOrgPackage 验证组织包只有在 available 时才参与额度判断；
+// cap<0 的占位包在解析层已被标记为 unavailable。
+func TestSlotHasQuotaOrgPackage(t *testing.T) {
+	s := testSlot(t, "quota", "teams")
+	now := time.Now()
+
+	s.SetQuota(0, 6_000_000, false)
+	if s.hasQuota(now) {
+		t.Fatal("zero user quota + unavailable org package must be treated as exhausted")
+	}
+
+	s.SetQuota(0, 1649, true)
+	if !s.hasQuota(now) {
+		t.Fatal("available org package should count as quota")
+	}
+
+	s.SetQuota(51, 0, false)
+	if !s.hasQuota(now) {
+		t.Fatal("positive user quota should count as quota")
+	}
+}
+
 func TestPoolPickRespectsExclude(t *testing.T) {
 	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
 	if s, ok := p.Pick(map[string]struct{}{"a": {}}); !ok || s.ID != "b" {

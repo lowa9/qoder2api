@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"qoder2api/internal/cosy"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -594,6 +595,17 @@ func sessionKeyFromBody(req map[string]interface{}) string {
 	return ""
 }
 
+var systemReminderPattern = regexp.MustCompile(`(?s)<system-reminder>.*?</system-reminder>`)
+
+// stripSystemReminders 去掉客户端注入的动态提醒块。
+// Claude Code 等客户端会把 git 状态、日期等易变信息放进
+// <system-reminder> 注入到 system / 首条 user 消息；这些内容一变，
+// 旧的 system+首条 user 哈希就会把同一个会话拆成两个键。
+func stripSystemReminders(s string) string {
+	s = systemReminderPattern.ReplaceAllString(s, "")
+	return strings.TrimSpace(s)
+}
+
 // deriveSessionKey 从消息前缀派生会话标识：同一会话的后续轮次
 // system + 首条 user 保持不变，因此键稳定；不同会话通常得到不同键。
 func deriveSessionKey(messages []interface{}) string {
@@ -606,16 +618,16 @@ func deriveSessionKey(messages []interface{}) string {
 		switch role, _ := m["role"].(string); role {
 		case "system":
 			if sys == "" {
-				sys = NormalizeMessageContent(m)
+				sys = stripSystemReminders(NormalizeMessageContent(m))
 			}
 		case "user":
-			firstUser = NormalizeMessageContent(m)
+			firstUser = stripSystemReminders(NormalizeMessageContent(m))
 			if firstUser == "" {
 				if contents, ok := m["contents"].([]interface{}); ok {
 					for _, b := range contents {
 						if bm, ok := b.(map[string]interface{}); ok {
 							if t, ok := bm["text"].(string); ok && t != "" {
-								firstUser = t
+								firstUser = stripSystemReminders(t)
 								break
 							}
 						}

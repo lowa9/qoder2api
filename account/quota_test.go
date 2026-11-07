@@ -35,6 +35,26 @@ func TestExtractOrgResourcePackage(t *testing.T) {
 	}
 }
 
+// cap<0 是上游占位值，remaining 为组织池总量，不代表本账号可用额度。
+func TestExtractOrgResourcePackageNegativeCap(t *testing.T) {
+	raw := map[string]interface{}{
+		"orgResourcePackage": map[string]interface{}{
+			"cap": -1.0, "used": 0.0, "remaining": 6357937.0,
+			"unit": "credits", "available": true,
+		},
+	}
+	pkg := extractOrgResourcePackage(raw)
+	if pkg == nil {
+		t.Fatal("orgResourcePackage should be parsed")
+	}
+	if pkg.Available {
+		t.Error("negative cap sentinel must not be treated as available quota")
+	}
+	if pkg.Remaining != 6357937 {
+		t.Errorf("remaining = %v, want raw value 6357937", pkg.Remaining)
+	}
+}
+
 // 非 Team 账号（个人版）响应中没有该字段，应返回 nil 而不是空结构，
 // 以便前端与旧账号渲染完全一致。
 func TestExtractOrgResourcePackageAbsent(t *testing.T) {
