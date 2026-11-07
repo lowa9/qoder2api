@@ -338,6 +338,11 @@ access token 并回传新的 refresh_token）在过期前**主动续期**。
 历史对话前缀因此保持不变，缓存可以继续命中；通知本身仍会被模型看到。
 设置 `QODER2API_RELOCATE_NOTIFICATIONS=off` 可关闭此行为。
 
+> 仅把 cc-switch 的 `apiFormat` 改成 `anthropic` **不能**绕过：Claude Code 本来
+> 就用 Anthropic 协议，通知已经写在 `system` 数组里；qoder2api 的 `/v1/messages`
+> 也会把多个 system block 拼成一条消息。搬运逻辑对 chat / messages 两条路径都生效。
+
+
 ### 🗂️ 请求体落盘（2026-11-08）
 
 **2026-11-08 CST** · 本地特性（`local/org-resource-package` 分支）

@@ -31,12 +31,21 @@ func TestRelocateTaskNotifications(t *testing.T) {
 		t.Errorf("trailing message = %+v, want system task notification", last)
 	}
 
-	// 稳定 system + 历史消息的前缀哈希应与“从未出现通知”时一致。
 	clean := []interface{}{
 		map[string]interface{}{"role": "system", "content": stable},
 		map[string]interface{}{"role": "user", "content": "继续"},
 		map[string]interface{}{"role": "assistant", "content": "好"},
 	}
+
+	// 未搬运前，通知会改变前缀组；会话键已由 reminder-stripping 保持稳定。
+	if derivePrefixGroup(msgs, "model") == derivePrefixGroup(clean, "model") {
+		t.Error("test premise: notification should change the prefix group before relocation")
+	}
+	if deriveSessionKey(msgs) != deriveSessionKey(clean) {
+		t.Error("session key should already ignore reminder-only changes")
+	}
+
+	// 稳定 system + 历史消息的前缀哈希应与“从未出现通知”时一致。
 	if a, b := derivePrefixGroup(out, "model"), derivePrefixGroup(clean, "model"); a != b {
 		t.Errorf("prefix group changed after relocation: %q vs %q", a, b)
 	}
