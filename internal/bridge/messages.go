@@ -2,7 +2,10 @@ package bridge
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
+
+	"qoder2api/logger"
 )
 
 func BuildQoderMessages(templateMsgs []interface{}, incoming []interface{}, prompt string, toolsEnabled bool) []interface{} {
@@ -374,4 +377,80 @@ func NormalizeMessageContent(msg map[string]interface{}) string {
 		}
 	}
 	return sb
+}
+
+// isTaskNotificationReminder 判断一个 <system-reminder> 块是否是后台任务完成
+// 通知。Claude Code 会把这类通知渲染成 system 角色。
+func isTaskNotificationReminder(block string) bool {
+	low := strings.ToLower(block)
+	return strings.Contains(low, "<task-notification>") ||
+		strings.Contains(low, "system notification - not user input")
+}
+
+// relocateTaskNotifications 把 system 消息中的后台任务通知块移到消息末尾。
+//
+// Claude Code 会把后台任务完成通知渲染成 system 角色；cc-switch 等代理会把
+// 所有 system 块合并进第一条 system 消息。通知一变，system 前缀和整个
+// prompt cache 就失效（实测 77 万 token 的会话只剩 5.4 万 token 命中）。
+// 移到末尾后，稳定 system + 历史对话仍构成相同前缀，缓存可以继续命中；
+// 通知仍保持 system 角色（上游实测会读取末尾的 system 消息）。
+func relocateTaskNotifications(messages []interface{}) []interface{} {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("QODER2API_RELOCATE_NOTIFICATIONS")), "off") {
+		return messages
+	}
+	var moved []string
+	changed := false
+	out := make([]interface{}, 0, len(messages)+1)
+	for _, it := range messages {
+		m, ok := it.(map[string]interface{})
+		if !ok {
+			out = append(out, it)
+			continue
+		}
+		if role, _ := m["role"].(string); role != "system" {
+			out = append(out, it)
+			continue
+		}
+		content, ok := m["content"].(string)
+		if !ok {
+			out = append(out, it)
+			continue
+		}
+		kept := content
+		movedHere := 0
+		for _, block := range systemReminderPattern.FindAllString(content, -1) {
+			if !isTaskNotificationReminder(block) {
+				continue
+			}
+			moved = append(moved, block)
+			kept = strings.Replace(kept, block, "", 1)
+			movedHere++
+		}
+		if movedHere == 0 {
+			out = append(out, it)
+			continue
+		}
+		changed = true
+		kept = strings.TrimSpace(kept)
+		if kept == "" {
+			continue
+		}
+		nm := make(map[string]interface{}, len(m))
+		for k, v := range m {
+			nm[k] = v
+		}
+		nm["content"] = kept
+		out = append(out, nm)
+	}
+	if !changed {
+		return messages
+	}
+	logger.Info("[relocate] moved %d task notification block(s) from the system prefix to the message tail", len(moved))
+	if len(moved) > 0 {
+		out = append(out, map[string]interface{}{
+			"role":    "system",
+			"content": strings.Join(moved, "\n\n"),
+		})
+	}
+	return out
 }

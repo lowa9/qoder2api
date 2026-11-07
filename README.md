@@ -318,6 +318,26 @@ access token 并回传新的 refresh_token）在过期前**主动续期**。
   同一个 Claude Code 会话拆成两个键（表现为中途换会话、缓存整段失效）。
   首条消息只含提醒时会继续使用后面真正的用户消息派生会话键。
 
+### 🔍 会话中途换前缀的根因：后台任务通知被渲染成 system（2026-11-08）
+
+**2026-11-08 CST** · 本地特性（`local/org-resource-package` 分支）
+
+对 03:19 那次「同一 Claude Code 会话突然换会话 ID、77.8 万 token 只剩
+5.4 万命中」的复盘结论：
+
+- 客户端 transcript 显示 03:19:08 一个后台训练任务完成，Claude Code 生成了
+  `<task-notification>`，该 attachment 的 `renderedRole` 是 **`system`**；
+- cc-switch 会把 Anthropic 的 `system` 数组（多个 block）拼成**一条**
+  OpenAI system 消息（已用受控请求验证：`SYS-A\nSYS-B\n<system-reminder>…`）；
+- 通知一变，第一条 system 就变 → 前缀组 / 会话键变化 → 缓存从稳定 system
+  结束处（54,528 token）整体失效。账号切换与空闲时长都不是原因；换号时前缀
+  未变，所以新账号仍能 99.9% 命中。
+
+处理：请求进入 `CallQoder` 前，把 system 消息中的**后台任务通知块**移动到
+消息末尾，仍保持 `system` 角色（上游实测会读取末尾 system）。稳定 system +
+历史对话前缀因此保持不变，缓存可以继续命中；通知本身仍会被模型看到。
+设置 `QODER2API_RELOCATE_NOTIFICATIONS=off` 可关闭此行为。
+
 ### 🗂️ 请求体落盘（2026-11-08）
 
 **2026-11-08 CST** · 本地特性（`local/org-resource-package` 分支）
