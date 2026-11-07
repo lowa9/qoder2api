@@ -66,6 +66,61 @@ func TestSlotHasQuotaOrgPackage(t *testing.T) {
 	}
 }
 
+// TestCacheAffinityModelsOnlyIsolated 只有账号隔离缓存的模型才走会话/前缀组粘性。
+func TestCacheAffinityModelsOnlyIsolated(t *testing.T) {
+	for _, m := range []string{"dfmodel", "dmodel"} {
+		if !usesCacheAffinity(m) {
+			t.Errorf("%s should use cache affinity", m)
+		}
+	}
+	for _, m := range []string{"kmodel_latest", "qmodel_38max", "qfmodel", "auto", "gmodel"} {
+		if usesCacheAffinity(m) {
+			t.Errorf("%s should not use cache affinity", m)
+		}
+	}
+}
+
+// TestPickBestQuotaIgnoresBindings 共享缓存模型直接选额度最高，不受会话/前缀组绑定影响；
+// 手动固定仍然优先。
+func TestPickBestQuotaIgnoresBindings(t *testing.T) {
+	SetStickyPool(true)
+	t.Cleanup(func() { SetStickyPool(true) })
+
+	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"), testSlot(t, "c", "t"))
+	p.SetQuota("a", 10, 0, false)
+	p.SetQuota("b", 100, 0, false)
+	p.SetQuota("c", 50, 0, false)
+	p.NoteSessionSuccess("sess", "a")
+	p.NoteGroupSuccess("grp", "a", "kmodel_latest", "preview")
+
+	if s, _ := p.PickWithAffinity("sess", "grp", nil); s == nil || s.ID != "a" {
+		t.Fatalf("affinity pick = %v, want a", s)
+	}
+	if s, _ := p.PickBestQuota(nil); s == nil || s.ID != "b" {
+		t.Fatalf("best quota pick = %v, want b", s)
+	}
+
+	p.PinAccount("c")
+	if s, _ := p.PickBestQuota(nil); s == nil || s.ID != "c" {
+		t.Fatalf("manual pin should win, got %v", s)
+	}
+}
+
+// TestBestQuotaIncludesOrgPackage 真实可用的组织包参与“额度最高”排序。
+func TestBestQuotaIncludesOrgPackage(t *testing.T) {
+	SetStickyPool(true)
+	t.Cleanup(func() { SetStickyPool(true) })
+
+	org := testSlot(t, "org", "teams")
+	user := testSlot(t, "user", "t")
+	org.SetQuota(0, 1000, true)
+	user.SetQuota(50, 0, false)
+	p := NewPool(org, user)
+	if s, _ := p.PickBestQuota(nil); s == nil || s.ID != "org" {
+		t.Fatalf("best quota pick = %v, want org account", s)
+	}
+}
+
 func TestPoolPickRespectsExclude(t *testing.T) {
 	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
 	if s, ok := p.Pick(map[string]struct{}{"a": {}}); !ok || s.ID != "b" {

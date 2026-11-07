@@ -108,6 +108,18 @@ func (s *Slot) quota() (float64, time.Time) {
 	return s.quotaRemaining, s.quotaAt
 }
 
+// rankQuota 用于「额度最高」排序：真实可用的组织包也计入。
+// cap<0 的占位包在解析层已标记为 unavailable，不会参与排序。
+func (s *Slot) rankQuota() (float64, time.Time) {
+	s.quotaMu.Lock()
+	defer s.quotaMu.Unlock()
+	q := s.quotaRemaining
+	if s.orgAvailable && s.orgRemaining > 0 {
+		q += s.orgRemaining
+	}
+	return q, s.quotaAt
+}
+
 // hasQuota 判断账号是否还有可用额度。额度未知或过旧时视为可用，
 // 避免因刷新失败把正常账号误判为耗尽。
 func (s *Slot) hasQuota(now time.Time) bool {
@@ -334,7 +346,7 @@ func (p *Pool) snapshot() []*Slot {
 // 可选 filter」的账号。filter 在锁外调用（允许其中做缓存/网络操作）。
 // Pick 无会话标识的选号（模型目录、控制台等场景沿用全局粘性）。
 func (p *Pool) Pick(exclude map[string]struct{}, filters ...func(*Slot) bool) (*Slot, bool) {
-	return p.pick("", "", exclude, filters...)
+	return p.pick("", "", true, exclude, filters...)
 }
 
 // PickWithSession 会话感知选号：
@@ -342,16 +354,23 @@ func (p *Pool) Pick(exclude map[string]struct{}, filters ...func(*Slot) bool) (*
 //   - 新会话/绑定失效 → 随机起点（多个会话分散到不同账号）
 //   - 会话为空时退化为原有全局粘性 + 冷启动随机
 func (p *Pool) PickWithSession(sessionKey string, exclude map[string]struct{}, filters ...func(*Slot) bool) (*Slot, bool) {
-	return p.pick(sessionKey, "", exclude, filters...)
+	return p.pick(sessionKey, "", true, exclude, filters...)
 }
 
 // PickWithAffinity 会话 + 前缀组双键选号。
 // 会话绑定优先；没有会话绑定时，相同 system 前缀（前缀组）复用同一账号。
 func (p *Pool) PickWithAffinity(sessionKey, groupKey string, exclude map[string]struct{}, filters ...func(*Slot) bool) (*Slot, bool) {
-	return p.pick(sessionKey, groupKey, exclude, filters...)
+	return p.pick(sessionKey, groupKey, true, exclude, filters...)
 }
 
-func (p *Pool) pick(sessionKey, groupKey string, exclude map[string]struct{}, filters ...func(*Slot) bool) (*Slot, bool) {
+// PickBestQuota 跳过会话/前缀组粘性，直接选当前剩余额度最高的账号。
+// 用于跨账号共享缓存的模型：换号不会丢缓存，没必要为粘性牺牲额度。
+// 手动固定的账号仍然优先，保留用户的显式选择。
+func (p *Pool) PickBestQuota(exclude map[string]struct{}, filters ...func(*Slot) bool) (*Slot, bool) {
+	return p.pick("", "", false, exclude, filters...)
+}
+
+func (p *Pool) pick(sessionKey, groupKey string, affinity bool, exclude map[string]struct{}, filters ...func(*Slot) bool) (*Slot, bool) {
 	if p == nil {
 		return nil, false
 	}
@@ -373,24 +392,29 @@ func (p *Pool) pick(sessionKey, groupKey string, exclude map[string]struct{}, fi
 	sessionAcc := ""
 	groupAcc := ""
 	if stickyEnabled.Load() {
-		currentID = p.pinned
-		// 当前路由账号闲置过期：清除，稍后立即改选额度最高
-		if currentID != "" && !p.pinnedAt.IsZero() && now.Sub(p.pinnedAt) > pinIdleTTL {
-			logger.Info("pool: current routing account %s expired after %s idle", currentID, pinIdleTTL)
-			currentID = ""
-			p.pinned = ""
-			p.pinnedManual = false
-			p.pinnedAt = time.Time{}
-		}
-		if sessionKey != "" {
-			if b, ok := p.sessions[sessionKey]; ok && now.Sub(b.seen) < sessionBindingTTL {
-				sessionAcc = b.accountID
+		if affinity {
+			currentID = p.pinned
+			// 当前路由账号闲置过期：清除，稍后立即改选额度最高
+			if currentID != "" && !p.pinnedAt.IsZero() && now.Sub(p.pinnedAt) > pinIdleTTL {
+				logger.Info("pool: current routing account %s expired after %s idle", currentID, pinIdleTTL)
+				currentID = ""
+				p.pinned = ""
+				p.pinnedManual = false
+				p.pinnedAt = time.Time{}
 			}
-		}
-		if groupKey != "" {
-			if b, ok := p.groups[groupKey]; ok && now.Sub(b.seen) < groupBindingTTL {
-				groupAcc = b.accountID
+			if sessionKey != "" {
+				if b, ok := p.sessions[sessionKey]; ok && now.Sub(b.seen) < sessionBindingTTL {
+					sessionAcc = b.accountID
+				}
 			}
+			if groupKey != "" {
+				if b, ok := p.groups[groupKey]; ok && now.Sub(b.seen) < groupBindingTTL {
+					groupAcc = b.accountID
+				}
+			}
+		} else if p.pinnedManual {
+			// 共享缓存模型只尊重手动固定，不跟随自动当前账号。
+			currentID = p.pinned
 		}
 	}
 	p.mu.Unlock()
@@ -449,7 +473,8 @@ func (p *Pool) pick(sessionKey, groupKey string, exclude map[string]struct{}, fi
 	needNewCurrent := currentID == "" || currentSlot == nil ||
 		!currentSlot.available(now) || !currentSlot.hasQuota(now)
 	if stickyEnabled.Load() && autoIdx >= 0 {
-		if needNewCurrent {
+		// 共享缓存模型不更新当前路由账号，避免影响需要粘性的模型。
+		if affinity && needNewCurrent {
 			p.setCurrentAuto(slots[autoIdx].ID, now)
 		}
 		start = autoIdx
@@ -535,7 +560,7 @@ func (p *Pool) bestQuotaIndex(slots []*Slot, exclude map[string]struct{}, now ti
 		if filter != nil && !filter(s) {
 			continue
 		}
-		rem, at := s.quota()
+		rem, at := s.rankQuota()
 		if at.IsZero() || now.Sub(at) > quotaFreshFor {
 			continue
 		}

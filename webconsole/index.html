@@ -151,6 +151,23 @@ th { white-space: nowrap; }
   .grid-2 { grid-template-columns: 1fr; }
   main { padding: 14px 12px 32px; }
 }
+
+  /* 活跃前缀组：固定高度，内容超出时滚动，避免面板无限增高 */
+  #groupsBox {
+    max-height: 240px;
+    overflow-y: auto;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 4px 8px;
+  }
+  #groupsBox th, #groupsBox td { padding: 4px 6px; vertical-align: top; }
+  #groupsBox thead th {
+    position: sticky;
+    top: 0;
+    background: var(--surface);
+    z-index: 1;
+    text-align: left;
+  }
   </style>
 </head>
 <body>
@@ -197,7 +214,7 @@ th { white-space: nowrap; }
     </section>
 
     <section class="card" data-view="accounts" hidden>
-      <h3>活跃前缀组 <span class="muted" style="font-size:12px">（同 system + 模型的缓存路由；每次成功请求续期，闲置 48 小时过期）</span></h3>
+      <h3>活跃前缀组 <span class="muted" style="font-size:12px">（仅 dfmodel/dmodel 等账号隔离缓存模型；同 system + 模型绑定账号，闲置 48 小时过期）</span></h3>
       <div id="groupsBox" style="font-size:12px">加载中...</div>
     </section>
 
