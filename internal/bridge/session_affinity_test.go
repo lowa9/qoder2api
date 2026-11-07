@@ -445,3 +445,26 @@ func TestCchMarkerIgnored(t *testing.T) {
 		t.Errorf("preview = %q, want cch stripped", got)
 	}
 }
+
+// TestBillingHeaderIgnored Claude Code 的 x-anthropic-billing-hdr 不应拆分
+// 前缀组/会话键，也不应出现在组预览里。
+func TestBillingHeaderIgnored(t *testing.T) {
+	mk := func(cch, ver string) []interface{} {
+		hdr := "x-anthropic-billing-hdr: cc_version=" + ver + "; cc_entrypoint=cli; cch=" + cch + ";"
+		return []interface{}{
+			map[string]interface{}{"role": "system", "content": hdr + "\nYou are Claude Code."},
+			map[string]interface{}{"role": "user", "content": "task"},
+		}
+	}
+	g1 := derivePrefixGroup(mk("64dfe", "2.1.280.096"), "dfmodel")
+	g2 := derivePrefixGroup(mk("808c0", "2.1.280.096"), "dfmodel")
+	if g1 == "" || g1 != g2 {
+		t.Fatalf("billing header split prefix group: %q vs %q", g1, g2)
+	}
+	if s1, s2 := deriveSessionKey(mk("64dfe", "2.1.280.096")), deriveSessionKey(mk("808c0", "2.1.280.096")); s1 != s2 {
+		t.Fatalf("billing header split session key: %q vs %q", s1, s2)
+	}
+	if got := systemPreview(mk("64dfe", "2.1.280.096"), 80); got != "You are Claude Code." {
+		t.Errorf("preview = %q, want billing header stripped", got)
+	}
+}

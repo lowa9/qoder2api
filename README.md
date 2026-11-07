@@ -340,8 +340,9 @@ access token 并回传新的 refresh_token）在过期前**主动续期**。
   cch=...; 客户端标记后的内容)`。面板预览只显示开头 160 字符，并附 8 位短键；
   两个组预览相同但键不同，通常是 system 后半段还有动态内容（日期/git 状态/
   后台任务通知/工具或环境信息）。
-- `cch=<5位hash>;` 是 Claude Code 注入的 cache-control 标记，会随会话变化但
-  不属于稳定 system；已从前缀组/会话键、组预览和请求预览中剥离。
+- Claude Code 会在 system 开头注入一行客户端计费/归因头
+  （`x-anthropic-billing-hdr: cch=<5位hash>;`），其中 `cch` 随会话变化但
+  不属于稳定 system；整行已从前缀组/会话键、组预览和请求预览中剥离。
 
 ### 🔍 会话中途换前缀的根因：后台任务通知被渲染成 system（2026-11-08）
 

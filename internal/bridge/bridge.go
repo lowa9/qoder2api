@@ -606,12 +606,21 @@ func stripSystemReminders(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// cch=xxxxx; 是客户端注入的 cache-control/hash 标记，会随会话/请求变化，
-// 但不属于稳定 system 内容；从路由键、会话键和预览里去掉。
-var cchPrefixPattern = regexp.MustCompile(`(?i)^\s*cch=[^;\s]+;\s*`)
+// Claude Code 会在 system 开头注入一条客户端计费/归因头：
+//
+//	x-anthropic-billing-header: cc_version=...; cc_entrypoint=cli; cch=xxxxx;
+//
+// 其中 cch 会随会话/请求变化，整条头也不属于稳定 system 内容。
+// 从路由键、会话键和预览里去掉，避免同一 agent 被拆成多个前缀组。
+var (
+	billingHeaderPattern = regexp.MustCompile(`(?im)^\s*x-anthropic-billing-hdr:[^\n]*\n?`)
+	cchTokenPattern      = regexp.MustCompile(`(?i)\bcch=[^;\s]*;?\s*`)
+)
 
 func stripClientMarkers(s string) string {
-	return strings.TrimSpace(cchPrefixPattern.ReplaceAllString(s, ""))
+	s = billingHeaderPattern.ReplaceAllString(s, "")
+	s = cchTokenPattern.ReplaceAllString(s, "")
+	return strings.TrimSpace(s)
 }
 
 // messagePrefix 取上游消息里的首条 system 与首条真正含文本的 user 消息。
