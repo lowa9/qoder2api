@@ -68,6 +68,7 @@ func (b *Bridge) HandleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 
 	prompt := ExtractLatestUserPrompt(incomingMsgs)
 	messages := BuildQoderMessages(b.templateMessages(), incomingMsgs, prompt, toolsEnabled)
+	DumpRequestBody("claude", reqID, model, requestClientIP(r), body, messages)
 
 	// 解析 thinking 参数和 max_tokens
 	opts := CallOpts{}

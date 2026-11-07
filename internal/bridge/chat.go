@@ -43,6 +43,7 @@ func (b *Bridge) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	prompt := ExtractLatestUserPrompt(incomingMsgs)
 	messages := BuildQoderMessages(b.templateMessages(), incomingMsgs, prompt, toolsEnabled)
+	DumpRequestBody("chat", reqID, model, requestClientIP(r), body, messages)
 
 	reqId := "chatcmpl-" + cosy.NewRequestID()
 	created := cosy.UnixSec()

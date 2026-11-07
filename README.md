@@ -318,6 +318,31 @@ access token 并回传新的 refresh_token）在过期前**主动续期**。
   同一个 Claude Code 会话拆成两个键（表现为中途换会话、缓存整段失效）。
   首条消息只含提醒时会继续使用后面真正的用户消息派生会话键。
 
+### 🗂️ 请求体落盘（2026-11-08）
+
+**2026-11-08 CST** · 本地特性（`local/org-resource-package` 分支）
+
+为了让「同一 Claude Code 会话中途换前缀」这类问题可复盘：
+
+- 当同一 `协议 + 模型 + 客户端 IP` 的**会话前缀**（system + 首条 user）指纹变化
+  （或进程启动后首次出现）时，把**原始请求体**写入 `<DataRoot>/request_dumps/`，
+  并在 **info** 日志输出 `sys_len`、`sys_sha`、`sys_norm_sha`、`first_sha`
+  与文件路径；
+- 前缀变化时额外把**前后两份**复制到 `request_dumps/changes/`，可直接 diff；
+- 相同前缀不会重复落盘，因此正常对话不会每轮写数 MB；只有动态提醒
+  变化（`*_sha` 变、`*_norm_sha` 不变）时限流 30 秒；
+- 上限：主目录 200 份 / 1GB，changes 100 份 / 512MB，自动淘汰最旧；
+- 文件权限 0600、目录 0700，仅保存在本机；设置 `QODER2API_DUMP_BODIES=off`
+  可完全关闭。
+
+排查示例：
+
+```bash
+jq '.messages[0].content' ~/.qoder2api-cn/request_dumps/changes/*-new.json | head
+diff <(jq . ~/.qoder2api-cn/request_dumps/changes/*-prev.json) \
+     <(jq . ~/.qoder2api-cn/request_dumps/changes/*-new.json) | head -50
+```
+
 ### ⏱️ TTL 续测：24h 仍命中，上调至 25h（2026-11-05）
 
 **2026-11-05 CST** · 本地特性（`local/org-resource-package` 分支）

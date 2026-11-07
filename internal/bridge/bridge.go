@@ -606,10 +606,8 @@ func stripSystemReminders(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// deriveSessionKey 从消息前缀派生会话标识：同一会话的后续轮次
-// system + 首条 user 保持不变，因此键稳定；不同会话通常得到不同键。
-func deriveSessionKey(messages []interface{}) string {
-	var sys, firstUser string
+// messagePrefix 取上游消息里的首条 system 与首条真正含文本的 user 消息。
+func messagePrefix(messages []interface{}) (sys, firstUser string) {
 	for _, it := range messages {
 		m, ok := it.(map[string]interface{})
 		if !ok {
@@ -618,27 +616,40 @@ func deriveSessionKey(messages []interface{}) string {
 		switch role, _ := m["role"].(string); role {
 		case "system":
 			if sys == "" {
-				sys = stripSystemReminders(NormalizeMessageContent(m))
+				sys = NormalizeMessageContent(m)
 			}
 		case "user":
-			firstUser = stripSystemReminders(NormalizeMessageContent(m))
-			if firstUser == "" {
+			candidate := NormalizeMessageContent(m)
+			if candidate == "" {
 				if contents, ok := m["contents"].([]interface{}); ok {
 					for _, b := range contents {
 						if bm, ok := b.(map[string]interface{}); ok {
 							if t, ok := bm["text"].(string); ok && t != "" {
-								firstUser = stripSystemReminders(t)
+								candidate = t
 								break
 							}
 						}
 					}
 				}
 			}
+			// 只有提醒块的 user 消息不算真正的首条用户内容，继续往后找。
+			if stripSystemReminders(candidate) != "" {
+				firstUser = candidate
+			}
 		}
 		if firstUser != "" {
 			break
 		}
 	}
+	return sys, firstUser
+}
+
+// deriveSessionKey 从消息前缀派生会话标识：同一会话的后续轮次
+// system + 首条 user 保持不变，因此键稳定；不同会话通常得到不同键。
+func deriveSessionKey(messages []interface{}) string {
+	sys, firstUser := messagePrefix(messages)
+	sys = stripSystemReminders(sys)
+	firstUser = stripSystemReminders(firstUser)
 	if firstUser == "" {
 		return ""
 	}
