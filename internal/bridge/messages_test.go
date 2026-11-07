@@ -37,9 +37,9 @@ func TestRelocateTaskNotifications(t *testing.T) {
 		map[string]interface{}{"role": "assistant", "content": "好"},
 	}
 
-	// 未搬运前，通知会改变前缀组；会话键已由 reminder-stripping 保持稳定。
-	if derivePrefixGroup(msgs, "model") == derivePrefixGroup(clean, "model") {
-		t.Error("test premise: notification should change the prefix group before relocation")
+	// 前缀组和会话键都已忽略提醒块；搬运主要解决的是上游缓存前缀。
+	if derivePrefixGroup(msgs, "model") != derivePrefixGroup(clean, "model") {
+		t.Error("prefix group should ignore reminder-only changes")
 	}
 	if deriveSessionKey(msgs) != deriveSessionKey(clean) {
 		t.Error("session key should already ignore reminder-only changes")

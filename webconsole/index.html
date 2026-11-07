@@ -214,7 +214,7 @@ th { white-space: nowrap; }
     </section>
 
     <section class="card" data-view="accounts" hidden>
-      <h3>活跃前缀组 <span class="muted" style="font-size:12px">（仅 dfmodel/dmodel 等账号隔离缓存模型；同 system + 模型绑定账号，闲置 48 小时过期）</span></h3>
+      <h3>活跃前缀组 <span class="muted" style="font-size:12px" title="键 = hash(模型 + 首条 system，已忽略动态 system-reminder)。预览只显示开头；同一对话出现多个组通常是 system 后半段还有动态内容。">（仅 dfmodel/dmodel 等账号隔离缓存模型；键 = hash(模型 + 首条 system)，预览只显示开头）</span></h3>
       <div id="groupsBox" style="font-size:12px">加载中...</div>
     </section>
 
@@ -1168,13 +1168,14 @@ th { white-space: nowrap; }
         const data = await api('/api/groups');
         const gs = data.groups || [];
         if (!gs.length) {
-          $('groupsBox').innerHTML = '<span class="muted">暂无活跃前缀组（只有带 system prompt 的成功请求才会生成）</span>';
+          $('groupsBox').innerHTML = '<span class="muted">暂无活跃前缀组（只有 dfmodel/dmodel 等账号隔离模型的成功请求才会生成）</span>';
           return;
         }
         const rows = gs.slice(0, 100).map(g => {
           const acct = g.account || g.account_id || '-';
+          const shortKey = String(g.key || '').replace(/^pfx:/, '').slice(0, 8);
           return `<tr><td>${esc(g.model || '-')}</td>` +
-            `<td title="${esc(g.key)}">${esc(g.preview || g.key)}</td>` +
+            `<td title="${esc(g.key)}">${esc(g.preview || g.key)} <span class="muted" style="font-size:10px">${esc(shortKey)}</span></td>` +
             `<td>${esc(acct)} <span class="muted">(${esc(g.region || '-')})</span></td>` +
             `<td>${fmtCallTime(g.last_seen)}</td>` +
             `<td style="text-align:right">${fmtTTL(g.remaining_sec)}</td></tr>`;

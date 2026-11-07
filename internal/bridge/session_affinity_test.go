@@ -386,3 +386,25 @@ func TestPoolCurrentRefreshOnSuccess(t *testing.T) {
 		t.Fatalf("refreshed current = %v, want b", s)
 	}
 }
+
+// TestDerivePrefixGroupIgnoresReminders 动态提醒不应把同一 system 拆成多个前缀组。
+func TestDerivePrefixGroupIgnoresReminders(t *testing.T) {
+	mk := func(rem string) []interface{} {
+		return []interface{}{
+			map[string]interface{}{"role": "system", "content": "You are Claude Code.\n<system-reminder>" + rem + "</system-reminder>"},
+			map[string]interface{}{"role": "user", "content": "任务"},
+		}
+	}
+	g1 := derivePrefixGroup(mk("git status: clean"), "dfmodel")
+	g2 := derivePrefixGroup(mk("git status: 3 files changed"), "dfmodel")
+	if g1 == "" || g1 != g2 {
+		t.Fatalf("reminder-only change split the group: %q vs %q", g1, g2)
+	}
+	other := []interface{}{
+		map[string]interface{}{"role": "system", "content": "You are Claude Code.\nExtra stable instruction."},
+		map[string]interface{}{"role": "user", "content": "任务"},
+	}
+	if g3 := derivePrefixGroup(other, "dfmodel"); g3 == g1 {
+		t.Fatal("real system change must produce a new group")
+	}
+}
