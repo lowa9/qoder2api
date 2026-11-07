@@ -689,7 +689,7 @@ func derivePrefixGroup(messages []interface{}, model string) string {
 	return "pfx:" + hex.EncodeToString(sum[:8])
 }
 
-// systemPreview 取首条 system 消息的短预览，用于控制台展示前缀组。
+// systemPreview 取首条 system 消息的短预览（去掉动态提醒），用于控制台展示前缀组。
 func systemPreview(messages []interface{}, max int) string {
 	for _, it := range messages {
 		m, ok := it.(map[string]interface{})
@@ -697,7 +697,11 @@ func systemPreview(messages []interface{}, max int) string {
 			continue
 		}
 		if role, _ := m["role"].(string); role == "system" {
-			return truncateRunesForLog(NormalizeMessageContent(m), max)
+			s := NormalizeMessageContent(m)
+			if stable := stripSystemReminders(s); stable != "" {
+				s = stable
+			}
+			return truncateRunesForLog(s, max)
 		}
 	}
 	return ""

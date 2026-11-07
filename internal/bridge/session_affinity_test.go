@@ -408,3 +408,19 @@ func TestDerivePrefixGroupIgnoresReminders(t *testing.T) {
 		t.Fatal("real system change must produce a new group")
 	}
 }
+
+// TestSystemPreviewStripsReminders 前缀组预览应显示稳定 system，而不是动态提醒。
+func TestSystemPreviewStripsReminders(t *testing.T) {
+	msgs := []interface{}{
+		map[string]interface{}{"role": "system", "content": "You are Claude Code.\n<system-reminder>git status: clean</system-reminder>"},
+	}
+	if got := systemPreview(msgs, 80); got != "You are Claude Code." {
+		t.Errorf("preview = %q, want stable system text", got)
+	}
+	only := []interface{}{
+		map[string]interface{}{"role": "system", "content": "<system-reminder>only reminder</system-reminder>"},
+	}
+	if got := systemPreview(only, 80); got == "" {
+		t.Error("reminder-only system should fall back to raw text")
+	}
+}
