@@ -38,10 +38,11 @@ type requestFingerprint struct {
 }
 
 func (f requestFingerprint) prefixKey() string {
-	if f.systemSHA == "" && f.firstUserSHA == "" {
+	if f.systemNormSHA == "" && f.firstUserNormSHA == "" {
 		return ""
 	}
-	return f.systemSHA + "|" + f.firstUserSHA
+	// 用归一化后的键判断是否变化：cch/纯 reminder 变化不落盘。
+	return f.systemNormSHA + "|" + f.firstUserNormSHA
 }
 
 func (f requestFingerprint) normKey() string {
@@ -125,10 +126,10 @@ func fingerprintMessages(messages []interface{}) requestFingerprint {
 	return requestFingerprint{
 		messages:         len(messages),
 		systemSHA:        shortSHA(sys),
-		systemNormSHA:    shortSHA(stripSystemReminders(sys)),
+		systemNormSHA:    shortSHA(stripClientMarkers(stripSystemReminders(sys))),
 		systemLen:        len(sys),
 		firstUserSHA:     shortSHA(firstUser),
-		firstUserNormSHA: shortSHA(stripSystemReminders(firstUser)),
+		firstUserNormSHA: shortSHA(stripClientMarkers(stripSystemReminders(firstUser))),
 		firstUserLen:     len(firstUser),
 	}
 }

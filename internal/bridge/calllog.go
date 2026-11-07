@@ -278,6 +278,7 @@ func cleanPreviewText(s string) string {
 	s = transcriptTagRE.ReplaceAllString(s, "")
 	s = commandTagRE.ReplaceAllString(s, "")
 	s = localCommandRE.ReplaceAllString(s, "")
+	s = stripClientMarkers(s)
 	s = strings.Join(strings.Fields(s), " ")
 	return strings.TrimSpace(s)
 }

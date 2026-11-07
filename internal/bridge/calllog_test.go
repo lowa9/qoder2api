@@ -296,6 +296,13 @@ func TestCallPreviewStripsWrappers(t *testing.T) {
 			want: "真实任务",
 		},
 		{
+			name: "cch marker",
+			msgs: []interface{}{
+				map[string]interface{}{"role": "user", "content": "cch=aaaaa;\nFix it"},
+			},
+			want: "Fix it",
+		},
+		{
 			name: "tool result first line",
 			msgs: []interface{}{
 				map[string]interface{}{"role": "tool", "content": "line one\nline two"},

@@ -606,6 +606,14 @@ func stripSystemReminders(s string) string {
 	return strings.TrimSpace(s)
 }
 
+// cch=xxxxx; 是客户端注入的 cache-control/hash 标记，会随会话/请求变化，
+// 但不属于稳定 system 内容；从路由键、会话键和预览里去掉。
+var cchPrefixPattern = regexp.MustCompile(`(?i)^\s*cch=[^;\s]+;\s*`)
+
+func stripClientMarkers(s string) string {
+	return strings.TrimSpace(cchPrefixPattern.ReplaceAllString(s, ""))
+}
+
 // messagePrefix 取上游消息里的首条 system 与首条真正含文本的 user 消息。
 func messagePrefix(messages []interface{}) (sys, firstUser string) {
 	for _, it := range messages {
@@ -648,8 +656,8 @@ func messagePrefix(messages []interface{}) (sys, firstUser string) {
 // system + 首条 user 保持不变，因此键稳定；不同会话通常得到不同键。
 func deriveSessionKey(messages []interface{}) string {
 	sys, firstUser := messagePrefix(messages)
-	sys = stripSystemReminders(sys)
-	firstUser = stripSystemReminders(firstUser)
+	sys = stripClientMarkers(stripSystemReminders(sys))
+	firstUser = stripClientMarkers(stripSystemReminders(firstUser))
 	if firstUser == "" {
 		return ""
 	}
@@ -681,7 +689,7 @@ func derivePrefixGroup(messages []interface{}, model string) string {
 	if sys == "" {
 		return ""
 	}
-	stable := stripSystemReminders(sys)
+	stable := stripClientMarkers(stripSystemReminders(sys))
 	if stable == "" {
 		stable = sys
 	}
@@ -698,7 +706,7 @@ func systemPreview(messages []interface{}, max int) string {
 		}
 		if role, _ := m["role"].(string); role == "system" {
 			s := NormalizeMessageContent(m)
-			if stable := stripSystemReminders(s); stable != "" {
+			if stable := stripClientMarkers(stripSystemReminders(s)); stable != "" {
 				s = stable
 			}
 			return truncateRunesForLog(s, max)

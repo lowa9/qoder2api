@@ -424,3 +424,24 @@ func TestSystemPreviewStripsReminders(t *testing.T) {
 		t.Error("reminder-only system should fall back to raw text")
 	}
 }
+
+// TestCchMarkerIgnored 客户端注入的 cch=...; 不应拆分前缀组/会话键。
+func TestCchMarkerIgnored(t *testing.T) {
+	mk := func(cch string) []interface{} {
+		return []interface{}{
+			map[string]interface{}{"role": "system", "content": cch + "\nYou are Claude Code."},
+			map[string]interface{}{"role": "user", "content": "task"},
+		}
+	}
+	g1 := derivePrefixGroup(mk("cch=aaaaa;"), "dfmodel")
+	g2 := derivePrefixGroup(mk("cch=bbbbb;"), "dfmodel")
+	if g1 == "" || g1 != g2 {
+		t.Fatalf("cch split prefix group: %q vs %q", g1, g2)
+	}
+	if s1, s2 := deriveSessionKey(mk("cch=aaaaa;")), deriveSessionKey(mk("cch=bbbbb;")); s1 != s2 {
+		t.Fatalf("cch split session key: %q vs %q", s1, s2)
+	}
+	if got := systemPreview(mk("cch=aaaaa;"), 80); got != "You are Claude Code." {
+		t.Errorf("preview = %q, want cch stripped", got)
+	}
+}
