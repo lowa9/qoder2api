@@ -208,6 +208,7 @@ th { white-space: nowrap; }
       <div class="row" id="statusMeta"></div>
       <div class="row" style="margin-top:10px">
         <button class="secondary" id="autoPickBtn">自动选号</button>
+        <button class="secondary" id="uncoolBtn">解除全部冷却</button>
         <span class="msg" id="autoPickMsg"></span>
         <span class="muted" id="pickHint"></span>
       </div>
@@ -1313,6 +1314,20 @@ th { white-space: nowrap; }
 
     $('ctxTierSave').onclick = saveCtxTier;
     $('refreshBtn').onclick = refresh;
+
+    $('uncoolBtn').onclick = async () => {
+      $('autoPickMsg').className = 'msg';
+      $('autoPickMsg').textContent = '处理中...';
+      try {
+        await api('/api/pool/uncool', { method: 'POST', body: '{}' });
+        await refresh();
+        $('autoPickMsg').className = 'msg ok';
+        $('autoPickMsg').textContent = '已解除全部冷却';
+      } catch (e) {
+        $('autoPickMsg').className = 'msg err';
+        $('autoPickMsg').textContent = '解除失败：' + e.message;
+      }
+    };
 
     $('autoPickBtn').onclick = async () => {
       $('autoPickMsg').className = 'msg';

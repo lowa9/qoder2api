@@ -92,13 +92,25 @@ type Slot struct {
 }
 
 // SetQuota 更新账号剩余额度缓存（由 Service 定期刷新）。
-func (s *Slot) SetQuota(remaining, orgRemaining float64, orgAvailable bool) {
+// 返回更新前后的可用额度（含真实组织包），供服务在额度上升时解除陈旧冷却。
+func (s *Slot) SetQuota(remaining, orgRemaining float64, orgAvailable bool) (before, after float64) {
 	s.quotaMu.Lock()
+	defer s.quotaMu.Unlock()
+	before = s.rankQuotaLocked()
 	s.quotaRemaining = remaining
 	s.orgRemaining = orgRemaining
 	s.orgAvailable = orgAvailable
 	s.quotaAt = time.Now()
-	s.quotaMu.Unlock()
+	after = s.rankQuotaLocked()
+	return before, after
+}
+
+func (s *Slot) rankQuotaLocked() float64 {
+	q := s.quotaRemaining
+	if s.orgAvailable && s.orgRemaining > 0 {
+		q += s.orgRemaining
+	}
+	return q
 }
 
 // quota 返回账号自身剩余额度与采集时间。
@@ -113,11 +125,7 @@ func (s *Slot) quota() (float64, time.Time) {
 func (s *Slot) rankQuota() (float64, time.Time) {
 	s.quotaMu.Lock()
 	defer s.quotaMu.Unlock()
-	q := s.quotaRemaining
-	if s.orgAvailable && s.orgRemaining > 0 {
-		q += s.orgRemaining
-	}
-	return q, s.quotaAt
+	return s.rankQuotaLocked(), s.quotaAt
 }
 
 // hasQuota 判断账号是否还有可用额度。额度未知或过旧时视为可用，
@@ -170,6 +178,13 @@ func (s *Slot) cool(d time.Duration, reason string) {
 func (s *Slot) noteSuccess() {
 	s.mu.Lock()
 	s.lastErr = ""
+	s.mu.Unlock()
+}
+
+// uncool 立即解除冷却（额度重置/充值后由刷新器或手动操作调用）。
+func (s *Slot) uncool() {
+	s.mu.Lock()
+	s.cooldownUntil = time.Time{}
 	s.mu.Unlock()
 }
 
@@ -518,6 +533,28 @@ func (p *Pool) Cool(id string, d time.Duration, reason string) {
 	}
 }
 
+// Uncool 立即解除指定账号的冷却；返回是否找到该账号。
+func (p *Pool) Uncool(id string) bool {
+	for _, s := range p.snapshot() {
+		if s.ID == id {
+			s.uncool()
+			logger.Info("pool: account %s cooldown cleared", id)
+			p.save()
+			return true
+		}
+	}
+	return false
+}
+
+// UncoolAll 解除池内所有账号的冷却（额度重置/充值后的手动兜底）。
+func (p *Pool) UncoolAll() {
+	for _, s := range p.snapshot() {
+		s.uncool()
+	}
+	logger.Info("pool: all account cooldowns cleared")
+	p.save()
+}
+
 // NoteSessionSuccess 记录会话与账号的绑定，后续同会话优先复用该账号。
 func (p *Pool) NoteSessionSuccess(sessionKey, id string) {
 	if p == nil || sessionKey == "" {
@@ -536,13 +573,13 @@ func (p *Pool) NoteSessionSuccess(sessionKey, id string) {
 }
 
 // SetQuota 更新某个账号的剩余额度缓存（供自动选号排序与额度兜底）。
-func (p *Pool) SetQuota(id string, remaining, orgRemaining float64, orgAvailable bool) {
+func (p *Pool) SetQuota(id string, remaining, orgRemaining float64, orgAvailable bool) (before, after float64) {
 	for _, s := range p.snapshot() {
 		if s.ID == id {
-			s.SetQuota(remaining, orgRemaining, orgAvailable)
-			return
+			return s.SetQuota(remaining, orgRemaining, orgAvailable)
 		}
 	}
+	return 0, 0
 }
 
 // quotaFreshFor 额度缓存在该时长内才参与排序。

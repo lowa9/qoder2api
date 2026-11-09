@@ -167,6 +167,7 @@ func main() {
 	mux.HandleFunc("/api/pool", handlePoolStatus)
 	mux.HandleFunc("/api/pool/cool", handlePoolCool)
 	mux.HandleFunc("/api/pool/unpin", handlePoolUnpin)
+	mux.HandleFunc("/api/pool/uncool", handlePoolUncool)
 	mux.HandleFunc("/api/groups", handleGroups)
 	mux.HandleFunc("/api/queue/log", handleQueueWaitLog)
 	mux.HandleFunc("/api/settings", handleGetSettings)
@@ -479,6 +480,23 @@ func handlePoolUnpin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	svc.UnpinPools()
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handlePoolUncool 解除指定账号（id 为空时全部）的冷却。
+func handlePoolUncool(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("POST required"))
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	_ = readJSON(r, &req) // 空 body 视为解除全部
+	if err := svc.UncoolAccounts(req.ID); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

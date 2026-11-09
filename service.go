@@ -233,9 +233,21 @@ func (s *Service) RefreshQuotas() {
 		if q.OrgResourcePackage != nil {
 			orgRem, orgAvail = q.OrgResourcePackage.Remaining, q.OrgResourcePackage.Available
 		}
+		increased := false
 		for _, pool := range pools {
 			if pool != nil {
-				pool.SetQuota(a.ID, rem, orgRem, orgAvail)
+				before, after := pool.SetQuota(a.ID, rem, orgRem, orgAvail)
+				if after > before && after > 0 {
+					increased = true
+				}
+			}
+		}
+		// 额度重置/充值后，立即解除因 403/112 留下的陈旧冷却。
+		if increased {
+			for _, pool := range pools {
+				if pool != nil {
+					pool.Uncool(a.ID)
+				}
 			}
 		}
 		updated++
@@ -604,6 +616,37 @@ func (s *Service) CoolAccount(id string, seconds int, reason string) error {
 		reason = "manual cooldown"
 	}
 	pool.Cool(id, time.Duration(seconds)*time.Second, reason)
+	return nil
+}
+
+// UncoolAccounts 解除指定账号（id 为空时全部）的冷却。
+func (s *Service) UncoolAccounts(id string) error {
+	s.bridgeMu.Lock()
+	pools := []*bridge.Pool{s.pool, s.globalPool}
+	s.bridgeMu.Unlock()
+	id = strings.TrimSpace(id)
+	if id == "" {
+		cleared := false
+		for _, p := range pools {
+			if p != nil {
+				p.UncoolAll()
+				cleared = true
+			}
+		}
+		if !cleared {
+			return fmt.Errorf("bridge not running")
+		}
+		return nil
+	}
+	found := false
+	for _, p := range pools {
+		if p != nil && p.Uncool(id) {
+			found = true
+		}
+	}
+	if !found {
+		return fmt.Errorf("account not found in pool")
+	}
 	return nil
 }
 

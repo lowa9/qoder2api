@@ -417,3 +417,33 @@ func TestPoolColdStartRandomPick(t *testing.T) {
 		t.Fatalf("sticky pick = %v, want c", s2)
 	}
 }
+
+// TestPoolUncool 手动解除冷却。
+func TestPoolUncool(t *testing.T) {
+	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
+	p.Cool("a", time.Minute, "quota")
+	if p.Uncool("missing") {
+		t.Error("uncool missing account should return false")
+	}
+	if !p.Uncool("a") {
+		t.Fatal("uncool existing account should return true")
+	}
+	for _, s := range p.snapshot() {
+		if s.ID == "a" && !s.available(time.Now()) {
+			t.Error("account a should be available after uncool")
+		}
+	}
+}
+
+// TestSetQuotaReportsIncrease 额度刷新返回前后可用额度，供自动解冷却判断。
+func TestSetQuotaReportsIncrease(t *testing.T) {
+	s := testSlot(t, "q", "teams")
+	before, after := s.SetQuota(0, 1000, true)
+	if before != 0 || after != 1000 {
+		t.Fatalf("quota before/after = %v/%v, want 0/1000", before, after)
+	}
+	before, after = s.SetQuota(0, 500, true)
+	if before != 1000 || after != 500 {
+		t.Fatalf("quota before/after = %v/%v, want 1000/500", before, after)
+	}
+}
