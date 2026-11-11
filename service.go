@@ -143,17 +143,25 @@ func (s *Service) activateAccount(id string, pin bool) error {
 	if err := account.SetActive(id); err != nil {
 		return err
 	}
-	acct, err := account.GetActive()
+	// 必须按请求的 ID 取账号：CN/Global 各有一个 active，
+	// GetActive() 可能返回另一区域的账号，导致 pin 错池。
+	acct, err := account.Get(id)
 	if err != nil || acct == nil {
 		return err
 	}
 	s.bridgeMu.Lock()
 	running := s.bridgeSrv != nil
-	hasPool := (s.pool != nil && s.poolRegion == acct.Region) ||
-		(acct.Region == account.RegionGlobal && s.globalPool != nil)
+	hasAccount := false
+	if s.pool != nil && s.poolRegion == acct.Region && s.pool.Contains(acct.ID) {
+		hasAccount = true
+	}
+	if acct.Region == account.RegionGlobal && s.globalPool != nil && s.globalPool.Contains(acct.ID) {
+		hasAccount = true
+	}
 	s.bridgeMu.Unlock()
-	// 桥已在运行且该区域有池：只切换当前路由账号，不重启桥（不影响已有会话）
-	if running && hasPool {
+	// 账号已在运行中的池里：只切换当前路由账号，不重启桥（不影响已有会话）。
+	// 新加的账号尚未进池时必须重建，否则 pin 到一个不存在的槽位会被忽略。
+	if running && hasAccount {
 		if pin {
 			s.pinAccount(acct)
 		}

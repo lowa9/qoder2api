@@ -447,3 +447,14 @@ func TestSetQuotaReportsIncrease(t *testing.T) {
 		t.Fatalf("quota before/after = %v/%v, want 1000/500", before, after)
 	}
 }
+
+// TestPoolContains 判断账号是否已在池中（新增账号需要重建池）。
+func TestPoolContains(t *testing.T) {
+	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
+	if !p.Contains("a") || !p.Contains("b") {
+		t.Error("existing accounts should be contained")
+	}
+	if p.Contains("missing") || p.Contains("") {
+		t.Error("missing/empty account should not be contained")
+	}
+}

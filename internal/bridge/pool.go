@@ -546,6 +546,19 @@ func (p *Pool) Uncool(id string) bool {
 	return false
 }
 
+// Contains 判断账号是否已经在当前池里（新增账号后池需要重建）。
+func (p *Pool) Contains(id string) bool {
+	if p == nil || id == "" {
+		return false
+	}
+	for _, s := range p.snapshot() {
+		if s.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 // UncoolAll 解除池内所有账号的冷却（额度重置/充值后的手动兜底）。
 func (p *Pool) UncoolAll() {
 	for _, s := range p.snapshot() {
