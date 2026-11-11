@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -67,8 +66,6 @@ func (s *Service) LoadRuntimeSettings() {
 	s.bridgeToken = settings.BridgeToken
 	// 排队重试参数（控制台可配）：启动时应用，保存设置时再由 handleSaveSettings 热更新
 	bridge.ApplyQueueSettings(settings.QueueMaxRetries, settings.QueueWaitCapSec, settings.QueueWaitDefaultSec, settings.EffectiveQueueWaitFirstToken())
-	// 账号池粘性：优先复用上次成功账号，提升上游前缀缓存命中
-	bridge.SetStickyPool(settings.EffectiveStickyPool())
 }
 
 // ApplyQueueSettings 热更新模型排队重试参数（控制台保存设置后调用，即时生效）。
@@ -681,25 +678,6 @@ func (s *Service) GetLogs(limit int) []logger.Entry {
 // RecentCalls 返回最近的模型调用记录（结构化，供控制台「模型调用日志」面板）。
 func (s *Service) RecentCalls(limit int) []bridge.CallRecord {
 	return bridge.RecentCalls(limit)
-}
-
-// GroupsStatus 返回所有池中仍活跃的前缀组（最近命中倒序）。
-func (s *Service) GroupsStatus() []bridge.GroupStatus {
-	s.bridgeMu.Lock()
-	pools := []*bridge.Pool{s.pool, s.globalPool}
-	s.bridgeMu.Unlock()
-	now := time.Now()
-	seen := map[*bridge.Pool]bool{}
-	var out []bridge.GroupStatus
-	for _, p := range pools {
-		if p == nil || seen[p] {
-			continue
-		}
-		seen[p] = true
-		out = append(out, p.GroupsStatus(now)...)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].LastSeen.After(out[j].LastSeen) })
-	return out
 }
 
 // CreditSummary 返回积分扣除历史聚合（按账号 / 按模型）。

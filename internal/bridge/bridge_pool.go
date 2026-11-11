@@ -76,13 +76,10 @@ func (b *Bridge) coolSlot(id string, d time.Duration, reason string) {
 }
 
 // noteSlotSuccess 记录成功（仅池模式下生效）。
-func (b *Bridge) noteSlotSuccess(id, sessionKey, groupKey, model, groupPreview string) {
+// 固定选号模式不再写会话/前缀组绑定；成功只清除失败标记并保持当前账号。
+func (b *Bridge) noteSlotSuccess(id string) {
 	if b.pool != nil {
 		b.pool.NoteSuccess(id)
-		if usesCacheAffinity(model) {
-			b.pool.NoteSessionSuccess(sessionKey, id)
-			b.pool.NoteGroupSuccess(groupKey, id, model, groupPreview)
-		}
 	}
 }
 
@@ -136,22 +133,10 @@ func (b *Bridge) slotSupportsModel(slot *Slot, model string) bool {
 	return slot.catalog[model]
 }
 
-// cacheAffinityModels 缓存按账号隔离、换号会冷启动的模型。
-// 其它模型的上游 prompt cache 跨账号共享（2026-11-08 实测），
-// 前缀组/会话粘性对它们没有缓存收益，直接选额度最高的账号。
-var cacheAffinityModels = map[string]bool{
-	"dfmodel": true, // DeepSeek-Flash
-	"dmodel":  true, // DeepSeek-V4-Pro
-}
-
-func usesCacheAffinity(model string) bool {
-	return cacheAffinityModels[model]
-}
-
 // pickSlotForModel 按模型选号：优先选目录里有该模型的同 region 账号。
 // 兜底同样限定同 region——跨 region 会把请求派给别区账号并扣其 credits
 // （实测 8963 曾把 CN 请求派给 global 账号产生扣费）。
-func (b *Bridge) pickSlotForModel(model string, exclude map[string]struct{}, sessionKey, groupKey string) (*Slot, bool) {
+func (b *Bridge) pickSlotForModel(model string, exclude map[string]struct{}) (*Slot, bool) {
 	// 本桥期望的区域：Bridge.region（单账号模式天然有值）；
 	// 池模式若 region 为空则回退到池内首个 slot。
 	wantRegion := b.region
@@ -171,10 +156,7 @@ func (b *Bridge) pickSlotForModel(model string, exclude map[string]struct{}, ses
 		return b.pickSlot(exclude)
 	}
 	pick := func(filters ...func(*Slot) bool) (*Slot, bool) {
-		if usesCacheAffinity(model) {
-			return b.pool.PickWithAffinity(sessionKey, groupKey, exclude, filters...)
-		}
-		return b.pool.PickBestQuota(exclude, filters...)
+		return b.pool.Pick(exclude, filters...)
 	}
 	slot, ok := pick(func(s *Slot) bool {
 		if !sameRegion(s) {

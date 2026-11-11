@@ -67,56 +67,65 @@ func TestSlotHasQuotaOrgPackage(t *testing.T) {
 }
 
 // TestCacheAffinityModelsOnlyIsolated 只有账号隔离缓存的模型才走会话/前缀组粘性。
-func TestCacheAffinityModelsOnlyIsolated(t *testing.T) {
-	for _, m := range []string{"dfmodel", "dmodel"} {
-		if !usesCacheAffinity(m) {
-			t.Errorf("%s should use cache affinity", m)
-		}
-	}
-	for _, m := range []string{"kmodel_latest", "qmodel_38max", "qfmodel", "auto", "gmodel"} {
-		if usesCacheAffinity(m) {
-			t.Errorf("%s should not use cache affinity", m)
-		}
-	}
-}
-
-// TestPickBestQuotaIgnoresBindings 共享缓存模型直接选额度最高，不受会话/前缀组绑定影响；
-// 手动固定仍然优先。
-func TestPickBestQuotaIgnoresBindings(t *testing.T) {
-	SetStickyPool(true)
-	t.Cleanup(func() { SetStickyPool(true) })
-
+// TestPoolFixedRouting 固定选号：当前账号优先；只有冷却/无额度才改选。
+func TestPoolFixedRouting(t *testing.T) {
 	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"), testSlot(t, "c", "t"))
 	p.SetQuota("a", 10, 0, false)
 	p.SetQuota("b", 100, 0, false)
 	p.SetQuota("c", 50, 0, false)
-	p.NoteSessionSuccess("sess", "a")
-	p.NoteGroupSuccess("grp", "a", "kmodel_latest", "preview")
 
-	if s, _ := p.PickWithAffinity("sess", "grp", nil); s == nil || s.ID != "a" {
-		t.Fatalf("affinity pick = %v, want a", s)
+	// 尚未固定：选额度最高的 b，并把它记为当前账号。
+	if s, ok := p.Pick(nil); !ok || s.ID != "b" {
+		t.Fatalf("initial pick = %v, want b", s)
 	}
-	if s, _ := p.PickBestQuota(nil); s == nil || s.ID != "b" {
-		t.Fatalf("best quota pick = %v, want b", s)
+	// 之后一直用 b，即使 a 额度更高也不换。
+	p.SetQuota("a", 999, 0, false)
+	for i := 0; i < 3; i++ {
+		if s, ok := p.Pick(nil); !ok || s.ID != "b" {
+			t.Fatalf("pick #%d = %v, want b", i, s)
+		}
 	}
 
+	// 手动切换优先。
 	p.PinAccount("c")
-	if s, _ := p.PickBestQuota(nil); s == nil || s.ID != "c" {
-		t.Fatalf("manual pin should win, got %v", s)
+	if s, ok := p.Pick(nil); !ok || s.ID != "c" {
+		t.Fatalf("manual pin pick = %v, want c", s)
+	}
+
+	// 当前账号冷却 → 改选额度最高的 a。
+	p.Cool("c", time.Minute, "test")
+	if s, ok := p.Pick(nil); !ok || s.ID != "a" {
+		t.Fatalf("after cooling c, pick = %v, want a", s)
+	}
+	// 冷却恢复后仍保持新的当前账号 a，不自动跳回。
+	p.Uncool("c")
+	if s, ok := p.Pick(nil); !ok || s.ID != "a" {
+		t.Fatalf("after recovery, pick = %v, want a (current)", s)
+	}
+}
+
+// TestPoolFixedRoutingSkipsNoQuota 当前账号额度耗尽时改选。
+func TestPoolFixedRoutingSkipsNoQuota(t *testing.T) {
+	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
+	p.SetQuota("a", 100, 0, false)
+	p.SetQuota("b", 50, 0, false)
+	if s, _ := p.Pick(nil); s == nil || s.ID != "a" {
+		t.Fatalf("initial pick = %v, want a", s)
+	}
+	p.SetQuota("a", 0, 0, false) // 额度耗尽
+	if s, _ := p.Pick(nil); s == nil || s.ID != "b" {
+		t.Fatalf("after quota exhausted, pick = %v, want b", s)
 	}
 }
 
 // TestBestQuotaIncludesOrgPackage 真实可用的组织包参与“额度最高”排序。
 func TestBestQuotaIncludesOrgPackage(t *testing.T) {
-	SetStickyPool(true)
-	t.Cleanup(func() { SetStickyPool(true) })
-
 	org := testSlot(t, "org", "teams")
 	user := testSlot(t, "user", "t")
 	org.SetQuota(0, 1000, true)
 	user.SetQuota(50, 0, false)
 	p := NewPool(org, user)
-	if s, _ := p.PickBestQuota(nil); s == nil || s.ID != "org" {
+	if s, _ := p.Pick(nil); s == nil || s.ID != "org" {
 		t.Fatalf("best quota pick = %v, want org account", s)
 	}
 }
@@ -319,8 +328,6 @@ func TestCooldownForRetryAfterSeconds(t *testing.T) {
 }
 
 func TestPickSlotForModelRoutesByRegion(t *testing.T) {
-	SetStickyPool(false)
-	t.Cleanup(func() { SetStickyPool(true) })
 	cn := testSlot(t, "cn-slot", "t")
 	cn.catalog = map[string]bool{"gmodel": true, "qfmodel": true}
 	cn.catalogAt = time.Now()
@@ -332,89 +339,48 @@ func TestPickSlotForModelRoutesByRegion(t *testing.T) {
 
 	// 区域独占模型 → 必须落到能提供它的区域
 	for i := 0; i < 3; i++ {
-		s, ok := br.pickSlotForModel("gmodel", nil, "", "")
+		s, ok := br.pickSlotForModel("gmodel", nil)
 		if !ok || s.ID != "cn-slot" {
 			t.Fatalf("gmodel should route to cn-slot, got %v", s)
 		}
-		s, ok = br.pickSlotForModel("ultimate", nil, "", "")
+		s, ok = br.pickSlotForModel("ultimate", nil)
 		if !ok || s.ID != "global-slot" {
 			t.Fatalf("ultimate should route to global-slot, got %v", s)
 		}
 	}
 
-	// 两区都有的模型 → 轮询两区
-	seen := map[string]bool{}
-	for i := 0; i < 4; i++ {
-		if s, ok := br.pickSlotForModel("qfmodel", nil, "", ""); ok {
-			seen[s.ID] = true
-		}
+	// 两区都有的模型 → 固定当前账号，不再轮询
+	first, ok := br.pickSlotForModel("qfmodel", nil)
+	if !ok || first == nil {
+		t.Fatal("qfmodel pick failed")
 	}
-	if !seen["cn-slot"] || !seen["global-slot"] {
-		t.Fatalf("qfmodel should rotate across both regions, seen=%v", seen)
+	for i := 0; i < 3; i++ {
+		if s, ok := br.pickSlotForModel("qfmodel", nil); !ok || s.ID != first.ID {
+			t.Fatalf("qfmodel should stay on %s, got %v", first.ID, s)
+		}
 	}
 
 	// 谁都不认识的模型 → 兜底任意可用账号
-	if s, ok := br.pickSlotForModel("nobody-has-this", nil, "", ""); !ok || s == nil {
+	if s, ok := br.pickSlotForModel("nobody-has-this", nil); !ok || s == nil {
 		t.Fatalf("unknown model should fall back to any slot, got %v", s)
 	}
 }
 
-// TestPoolStickyRouting 验证粘性选号：成功账号被优先复用；
-// 冷却后回落轮询；关闭粘性后恢复严格轮询。
-func TestPoolStickyRouting(t *testing.T) {
-	SetStickyPool(true)
-	t.Cleanup(func() { SetStickyPool(true) })
-
+// TestPoolNoRotation 固定选号下不再轮询换号：成功账号持续服务。
+func TestPoolNoRotation(t *testing.T) {
 	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
-	// 冷启动起点是随机的，先取到哪个就粘哪个
-	first, ok := p.Pick(nil)
-	if !ok {
-		t.Fatal("first pick failed")
-	}
-	p.NoteSuccess(first.ID)
-	// 轮询本应换号，粘性应持续返回同一账号
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 5; i++ {
 		s, ok := p.Pick(nil)
-		if !ok || s.ID != first.ID {
-			t.Fatalf("sticky pick #%d = %v, want %s", i, s, first.ID)
+		if !ok {
+			t.Fatalf("pick #%d failed", i)
 		}
+		p.NoteSuccess(s.ID)
 	}
-	// 该账号冷却 → 回落另一个
-	p.Cool(first.ID, time.Minute, "test")
-	if s, ok := p.Pick(nil); !ok || s.ID == first.ID {
-		t.Fatalf("after cooling %s, pick = %v, want the other account", first.ID, s)
-	}
-
-	// 关闭粘性：新池严格轮询
-	SetStickyPool(false)
-	p2 := NewPool(testSlot(t, "c", "t"), testSlot(t, "d", "t"))
-	p2.NoteSuccess("c")
-	if s, _ := p2.Pick(nil); s.ID != "c" {
-		t.Fatalf("first pick = %v, want c", s)
-	}
-	if s, _ := p2.Pick(nil); s.ID != "d" {
-		t.Fatalf("second pick = %v, want d (rotation, sticky off)", s)
-	}
-}
-
-// TestPoolColdStartRandomPick 验证冷启动（尚无成功账号）时随机起点，
-// 不再是永远第一个；选定并成功后会粘住该账号。
-func TestPoolColdStartRandomPick(t *testing.T) {
-	oldRand := poolRandIndex
-	poolRandIndex = func(n int) int { return 2 }
-	t.Cleanup(func() { poolRandIndex = oldRand })
-	SetStickyPool(true)
-	t.Cleanup(func() { SetStickyPool(true) })
-
-	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"), testSlot(t, "c", "t"), testSlot(t, "d", "t"))
-	s, ok := p.Pick(nil)
-	if !ok || s.ID != "c" {
-		t.Fatalf("cold start pick = %v, want c (random index 2)", s)
-	}
-	p.NoteSuccess("c")
-	// 已有成功账号：粘性复用，不再随机
-	if s2, _ := p.Pick(nil); s2.ID != "c" {
-		t.Fatalf("sticky pick = %v, want c", s2)
+	// 全部冷却时返回 false
+	p.Cool("a", time.Minute, "test")
+	p.Cool("b", time.Minute, "test")
+	if _, ok := p.Pick(nil); ok {
+		t.Error("expected no available account when all cooling")
 	}
 }
 

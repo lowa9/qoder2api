@@ -152,22 +152,6 @@ th { white-space: nowrap; }
   main { padding: 14px 12px 32px; }
 }
 
-  /* 活跃前缀组：固定高度，内容超出时滚动，避免面板无限增高 */
-  #groupsBox {
-    max-height: 240px;
-    overflow-y: auto;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 4px 8px;
-  }
-  #groupsBox th, #groupsBox td { padding: 4px 6px; vertical-align: top; }
-  #groupsBox thead th {
-    position: sticky;
-    top: 0;
-    background: var(--surface);
-    z-index: 1;
-    text-align: left;
-  }
   </style>
 </head>
 <body>
@@ -212,11 +196,6 @@ th { white-space: nowrap; }
         <span class="msg" id="autoPickMsg"></span>
         <span class="muted" id="pickHint"></span>
       </div>
-    </section>
-
-    <section class="card" data-view="accounts" hidden>
-      <h3>活跃前缀组 <span class="muted" style="font-size:12px" title="键 = hash(模型 + 首条 system，已忽略动态 system-reminder)。预览只显示开头；同一对话出现多个组通常是 system 后半段还有动态内容。">（仅 dfmodel/dmodel 等账号隔离缓存模型；键 = hash(模型 + 首条 system)，预览只显示开头）</span></h3>
-      <div id="groupsBox" style="font-size:12px">加载中...</div>
     </section>
 
     <section class="card" data-view="accounts">
@@ -367,17 +346,7 @@ th { white-space: nowrap; }
     <section class="card" data-view="config" hidden>
       <h3>账号池策略</h3>
       <div class="row">
-        <label class="pill" style="cursor:pointer;margin-bottom:0">
-          <input type="checkbox" id="stickyPoolToggle" style="width:auto;margin-right:6px">
-          粘性选号（优先复用上次成功账号）
-        </label>
-        <button id="saveStickyBtn">保存</button>
-        <span class="msg" id="stickyMsg"></span>
-      </div>
-      <div class="muted" style="margin-top:8px">
-        会话内复用上次成功账号；相同 system 前缀的新会话（压缩/续写）也复用同一账号，
-        上游前缀缓存更易命中（实测命中时 credits 约为未命中的 1/9~1/25）。
-        不同 system 的会话会分散到不同账号；账号失败或冷却时自动换号；关闭后为纯轮询。
+        <span class="muted">固定选号：请求始终使用当前账号；只有账号冷却、额度耗尽或手动切换才会换号。</span>
       </div>
     </section>
 
@@ -523,9 +492,6 @@ th { white-space: nowrap; }
         }
         if (document.activeElement !== $('autoCheckinTimes')) {
           $('autoCheckinTimes').value = (st.auto_checkin_times || []).join(',');
-        }
-        if ($('stickyPoolToggle')) {
-          $('stickyPoolToggle').checked = (st.sticky_pool === undefined || st.sticky_pool === null) ? true : !!st.sticky_pool;
         }
       } catch (e) {
         fillConnection({}, {});
@@ -1164,31 +1130,6 @@ th { white-space: nowrap; }
       return sec + 's';
     }
 
-    async function loadGroups() {
-      try {
-        const data = await api('/api/groups');
-        const gs = data.groups || [];
-        if (!gs.length) {
-          $('groupsBox').innerHTML = '<span class="muted">暂无活跃前缀组（只有 dfmodel/dmodel 等账号隔离模型的成功请求才会生成）</span>';
-          return;
-        }
-        const rows = gs.slice(0, 100).map(g => {
-          const acct = g.account || g.account_id || '-';
-          const shortKey = String(g.key || '').replace(/^pfx:/, '').slice(0, 8);
-          return `<tr><td>${esc(g.model || '-')}</td>` +
-            `<td title="${esc(g.key)}">${esc(g.preview || g.key)} <span class="muted" style="font-size:10px">${esc(shortKey)}</span></td>` +
-            `<td>${esc(acct)} <span class="muted">(${esc(g.region || '-')})</span></td>` +
-            `<td>${fmtCallTime(g.last_seen)}</td>` +
-            `<td style="text-align:right">${fmtTTL(g.remaining_sec)}</td></tr>`;
-        }).join('');
-        $('groupsBox').innerHTML = `<table style="width:100%;border-collapse:collapse">` +
-          `<thead><tr style="color:var(--muted)"><th>模型</th><th>前缀预览</th><th>绑定账号</th><th>最近命中</th><th style="text-align:right">剩余 TTL</th></tr></thead>` +
-          `<tbody>${rows}</tbody></table>`;
-      } catch (e) {
-        $('groupsBox').innerHTML = `<span class="msg err">${esc(e.message)}</span>`;
-      }
-    }
-
     async function loadCredits() {
       try {
         creditCache = await api('/api/credits');
@@ -1210,7 +1151,6 @@ th { white-space: nowrap; }
       loadWaitLog();
       loadCalls();
       loadCredits();
-      loadGroups();
 
       try {
         let pool = null;
@@ -1218,8 +1158,8 @@ th { white-space: nowrap; }
         if ($('pickHint')) {
           const pinned = ((pool && pool.slots) || []).find(s => s.pinned);
           $('pickHint').textContent = pinned
-            ? `当前路由账号：${pinned.name}（${pinned.pinned_manual ? '手动' : '自动'}；闲置 48h 自动改选额度最高）`
-            : '自动选号：未绑定请求使用当前路由账号，额度耗尽自动改选额度最高';
+            ? `当前路由账号：${pinned.name}（${pinned.pinned_manual ? '手动' : '自动'}；冷却或额度耗尽时自动改选）`
+            : '固定选号：首次请求选额度最高的账号；冷却或额度耗尽时自动改选';
         }
         const accounts = await api('/api/accounts');
         renderAccounts(accounts, pool);
@@ -1438,22 +1378,6 @@ th { white-space: nowrap; }
       } catch (e) {
         $('connMsg').className = 'msg err';
         $('connMsg').textContent = e.message;
-      }
-    };
-
-    $('saveStickyBtn').onclick = async () => {
-      $('stickyMsg').className = 'msg';
-      $('stickyMsg').textContent = '保存中...';
-      try {
-        await api('/api/settings/save', {
-          method: 'POST',
-          body: JSON.stringify({ sticky_pool: $('stickyPoolToggle').checked }),
-        });
-        $('stickyMsg').className = 'msg ok';
-        $('stickyMsg').textContent = '已保存，即时生效';
-      } catch (e) {
-        $('stickyMsg').className = 'msg err';
-        $('stickyMsg').textContent = e.message;
       }
     };
 
