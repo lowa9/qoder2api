@@ -75,6 +75,13 @@ func (b *Bridge) coolSlot(id string, d time.Duration, reason string) {
 	}
 }
 
+// markSlotExhausted 标记账号额度耗尽（不做定时冷却，由额度回升/手动解除清除）。
+func (b *Bridge) markSlotExhausted(id, reason string) {
+	if b.pool != nil {
+		b.pool.MarkExhausted(id, reason)
+	}
+}
+
 // noteSlotSuccess 记录成功（仅池模式下生效）。
 // 固定选号模式不再写会话/前缀组绑定；成功只清除失败标记并保持当前账号。
 func (b *Bridge) noteSlotSuccess(id string) {

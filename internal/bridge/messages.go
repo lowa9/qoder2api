@@ -455,18 +455,19 @@ func relocateTaskNotifications(messages []interface{}) []interface{} {
 	return out
 }
 
-// stripBillingHeaderFromMessages 删除 system 消息里的客户端计费/归因头。
+// stripClientMetaFromMessages 删除 system 消息里的客户端传输层元数据行。
 //
-// Claude Code 会把
+// Claude Code 会注入 `x-anthropic-billing-header: ... cch=xxxxx;`，其它客户端
+// （omp 等）可能用别的 x-* 头。这些行不是模型指令，且带每次都变的字段。
+// Qwen/Kimi 的上游前缀缓存严格按前缀匹配：实测同一个 ~20k 前缀仅 cch 变化
+// 就让命中率从 100% 掉到 0%（DeepSeek 不受影响）。Qoder 不校验这些头。
 //
-//	x-anthropic-billing-header: cc_version=...; cc_entrypoint=cli; cch=xxxxx;
-//
-// 注入到 system 开头，其中 cch 每次请求都变。Qwen/Kimi 的上游前缀缓存
-// 严格按前缀匹配：实测同一个 ~20k 前缀仅 cch 变化就让命中率从 100% 掉到 0%
-// （DeepSeek 不受影响）。该头只对 Anthropic 官方计费有意义，Qoder 不校验。
-func stripBillingHeaderFromMessages(messages []interface{}) []interface{} {
+// 用通用规则（见 clientMetaLinePattern）而非逐字段硬编码，换客户端或上游
+// 新增字段都不必再改代码。剥离了什么会打一条 info 日志便于发现新字段。
+func stripClientMetaFromMessages(messages []interface{}) []interface{} {
 	out := make([]interface{}, 0, len(messages))
 	changed := false
+	var removed []string
 	for _, it := range messages {
 		m, ok := it.(map[string]interface{})
 		if !ok {
@@ -482,16 +483,14 @@ func stripBillingHeaderFromMessages(messages []interface{}) []interface{} {
 			out = append(out, it)
 			continue
 		}
-		stripped := content
-		if billingHeaderPattern.MatchString(stripped) {
-			stripped = billingHeaderPattern.ReplaceAllString(stripped, "")
+		for _, line := range clientMetaLinePattern.FindAllString(content, -1) {
+			removed = append(removed, strings.TrimSpace(line))
 		}
-		if !cchTokenPattern.MatchString(stripped) && stripped == content {
+		stripped := stripClientMarkers(content)
+		if stripped == strings.TrimSpace(content) {
 			out = append(out, it)
 			continue
 		}
-		stripped = cchTokenPattern.ReplaceAllString(stripped, "")
-		stripped = strings.TrimSpace(stripped)
 		changed = true
 		if stripped == "" {
 			continue
@@ -505,6 +504,9 @@ func stripBillingHeaderFromMessages(messages []interface{}) []interface{} {
 	}
 	if !changed {
 		return messages
+	}
+	for _, line := range removed {
+		logger.Info("[clientmeta] stripped from upstream system: %s", truncateRunesForLog(line, 200))
 	}
 	return out
 }

@@ -346,7 +346,7 @@ th { white-space: nowrap; }
     <section class="card" data-view="config" hidden>
       <h3>账号池策略</h3>
       <div class="row">
-        <span class="muted">固定选号：请求始终使用当前账号；只有账号冷却、额度耗尽或手动切换才会换号。</span>
+        <span class="muted">固定选号：请求始终使用当前账号；只有账号冷却、额度耗尽或手动切换才会换号。额度耗尽不做定时冷却，额度回升或点「解除全部冷却」后自动恢复；换号时额度接近则优先最近用过的账号（保缓存）。</span>
       </div>
     </section>
 
@@ -772,13 +772,16 @@ th { white-space: nowrap; }
         const cachedQuota = quotaCache[a.id];
         const slot = poolById[a.id];
         const coolMs = slot ? (slot.cooling_remaining_ms || 0) : 0;
+        const exhausted = !!(slot && slot.quota_exhausted);
         const poolBadge = slot
-          ? (coolMs > 0
-            ? `<span class="pill" style="border-color:transparent;background:var(--warn-soft);color:var(--warn)">冷却中 ${fmtDur(coolMs)}</span>`
-            : `<span class="pill" style="border-color:transparent;background:var(--ok-soft);color:var(--ok)">可用</span>`)
+          ? (exhausted
+            ? '<span class="pill" style="border-color:transparent;background:var(--bad-soft);color:var(--bad)">额度耗尽</span>'
+            : (coolMs > 0
+              ? `<span class="pill" style="border-color:transparent;background:var(--warn-soft);color:var(--warn)">冷却中 ${fmtDur(coolMs)}</span>`
+              : `<span class="pill" style="border-color:transparent;background:var(--ok-soft);color:var(--ok)">可用</span>`))
           : '';
-        const poolNote = (slot && coolMs > 0 && slot.last_error)
-          ? `<div class="muted" style="font-size:11px">${slot.last_error}</div>` : '';
+        const poolNote = (slot && (coolMs > 0 || exhausted) && slot.last_error)
+          ? `<div class="muted" style="font-size:11px">${esc(slot.last_error)}</div>` : '';
         const curBadge = slot && slot.pinned
           ? (slot.pinned_manual
             ? '<span class="pill" style="border-color:transparent;background:var(--accent-soft);color:var(--accent)">当前 · 手动</span>'

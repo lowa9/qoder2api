@@ -75,15 +75,15 @@ func TestRelocateTaskNotificationsWithoutSystem(t *testing.T) {
 	}
 }
 
-// TestStripBillingHeaderFromMessages 客户端计费头不应进入上游 system，
-// 否则 Qwen/Kimi 的前缀缓存每次都会失效。
-func TestStripBillingHeaderFromMessages(t *testing.T) {
+// TestStripClientMetaFromMessages 客户端传输层元数据行不应进入上游 system，
+// 否则 Qwen/Kimi 的前缀缓存每次都会失效。用通用规则覆盖不同客户端的字段。
+func TestStripClientMetaFromMessages(t *testing.T) {
 	hdr := "x-anthropic-billing-header: cc_version=2.1.280.096; cc_entrypoint=cli; cch=64dfe;"
 	msgs := []interface{}{
 		map[string]interface{}{"role": "system", "content": hdr + "\nYou are Claude Code."},
 		map[string]interface{}{"role": "user", "content": "hi"},
 	}
-	out := stripBillingHeaderFromMessages(msgs)
+	out := stripClientMetaFromMessages(msgs)
 	sys, _ := out[0].(map[string]interface{})["content"].(string)
 	if strings.Contains(sys, "cch=") || strings.Contains(sys, "billing-header") {
 		t.Errorf("billing header still present: %q", sys)
@@ -97,12 +97,27 @@ func TestStripBillingHeaderFromMessages(t *testing.T) {
 		t.Error("input messages must not be mutated")
 	}
 
-	// 只有计费头的 system 消息应整体丢弃。
+	// 其它客户端（omp 等）用别的 x-* 头也应剥离，无需改代码。
+	for _, other := range []string{
+		"x-anthropic-billing-hdr: cc_version=1; cch=abcde;",
+		"x-omp-trace: session=zzz; turn=42;",
+		"x-client-meta: id=1234; seq=9;",
+	} {
+		m := []interface{}{
+			map[string]interface{}{"role": "system", "content": other + "\nYou are an agent."},
+		}
+		got, _ := stripClientMetaFromMessages(m)[0].(map[string]interface{})["content"].(string)
+		if got != "You are an agent." {
+			t.Errorf("header %q not stripped: %q", other, got)
+		}
+	}
+
+	// 只有元数据行的 system 消息应整体丢弃。
 	only := []interface{}{
 		map[string]interface{}{"role": "system", "content": hdr},
 		map[string]interface{}{"role": "user", "content": "hi"},
 	}
-	if out := stripBillingHeaderFromMessages(only); len(out) != 1 {
+	if out := stripClientMetaFromMessages(only); len(out) != 1 {
 		t.Errorf("header-only system message should be dropped, got %d messages", len(out))
 	}
 
@@ -110,13 +125,21 @@ func TestStripBillingHeaderFromMessages(t *testing.T) {
 	inline := []interface{}{
 		map[string]interface{}{"role": "system", "content": "You are Claude Code. cch=abc12; stable"},
 	}
-	if s, _ := stripBillingHeaderFromMessages(inline)[0].(map[string]interface{})["content"].(string); strings.Contains(s, "cch=") {
+	if s, _ := stripClientMetaFromMessages(inline)[0].(map[string]interface{})["content"].(string); strings.Contains(s, "cch=") {
 		t.Errorf("inline cch not stripped: %q", s)
 	}
 
-	// 无计费头时返回原切片，不做无谓复制。
+	// 正文里以 x- 开头但不是 key=value 元数据的句子不能被误删。
+	prose := []interface{}{
+		map[string]interface{}{"role": "system", "content": "x-axis labels should be short.\nKeep going."},
+	}
+	if got := stripClientMetaFromMessages(prose); &got[0] != &prose[0] {
+		t.Error("prose starting with x- must not be stripped")
+	}
+
+	// 无元数据时返回原切片，不做无谓复制。
 	plain := []interface{}{map[string]interface{}{"role": "system", "content": "plain system"}}
-	if got := stripBillingHeaderFromMessages(plain); &got[0] != &plain[0] {
+	if got := stripClientMetaFromMessages(plain); &got[0] != &plain[0] {
 		t.Error("plain messages should be returned as-is")
 	}
 }

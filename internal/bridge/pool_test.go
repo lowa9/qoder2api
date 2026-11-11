@@ -199,7 +199,7 @@ func poolBridge(t *testing.T, url string, ids ...string) (*Bridge, *Pool) {
 	return b, pool
 }
 
-// 第一个账号 403（额度）→ 冷却换号 → 第二个账号 200 成功。
+// 第一个账号 403/112（额度耗尽）→ 标记无额度并换号 → 第二个账号 200 成功。
 func TestCallQoderFailsOverToNextAccount(t *testing.T) {
 	hits := 0
 	var userTypes []string
@@ -255,11 +255,17 @@ func TestCallQoderFailsOverToNextAccount(t *testing.T) {
 		t.Fatalf("pick = %v, want successful account %s", s, successID)
 	}
 	if _, ok := pool.Pick(map[string]struct{}{successID: {}}); ok {
-		t.Fatal("the failed account should be cooling after 403")
+		t.Fatal("the failed account should be excluded after quota exhaustion")
+	}
+	// 额度耗尽不做定时冷却：账号仍 available，只是没额度。
+	for _, st := range pool.Status() {
+		if st.ID != successID && st.CoolingRemainingMS > 0 {
+			t.Errorf("quota exhaustion must not set a timed cooldown, got %dms", st.CoolingRemainingMS)
+		}
 	}
 }
 
-// 所有账号都 403 → 每个账号各试一次后返回错误，且全部进入冷却。
+// 所有账号都 403/112 → 每个账号各试一次后返回错误，且全部标记为无额度（不冷却）。
 func TestCallQoderAllAccountsFail(t *testing.T) {
 	hits := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -278,7 +284,15 @@ func TestCallQoderAllAccountsFail(t *testing.T) {
 		t.Fatalf("hits = %d, want 2 (one per account)", hits)
 	}
 	if _, ok := pool.Pick(nil); ok {
-		t.Fatal("both accounts should be cooling")
+		t.Fatal("both accounts should be excluded as quota-exhausted")
+	}
+	for _, st := range pool.Status() {
+		if !st.QuotaExhausted {
+			t.Errorf("account %s should be marked quota-exhausted", st.Name)
+		}
+		if st.CoolingRemainingMS > 0 {
+			t.Errorf("account %s must not have a timed cooldown", st.Name)
+		}
 	}
 }
 
@@ -422,5 +436,102 @@ func TestPoolContains(t *testing.T) {
 	}
 	if p.Contains("missing") || p.Contains("") {
 		t.Error("missing/empty account should not be contained")
+	}
+}
+
+// TestQuotaExhaustedNoTimedCooldown 额度耗尽标记账号无额度，但不做定时冷却；
+// 额度回升或成功调用后恢复。
+func TestQuotaExhaustedNoTimedCooldown(t *testing.T) {
+	s := testSlot(t, "q", "teams")
+	now := time.Now()
+	s.SetQuota(100, 0, false)
+	if !s.hasQuota(now) {
+		t.Fatal("should have quota initially")
+	}
+	s.markExhausted("403 code 112")
+	if s.hasQuota(now) {
+		t.Error("exhausted account must not have quota")
+	}
+	if !s.available(now) {
+		t.Error("exhausted must not set a timed cooldown")
+	}
+	// 成功调用证明还有额度 → 清除标记
+	s.noteSuccess()
+	if !s.hasQuota(now) {
+		t.Error("success should clear exhausted flag")
+	}
+	// 手动解除同样清除
+	s.markExhausted("again")
+	s.uncool()
+	if s.isExhausted() {
+		t.Error("uncool should clear exhausted flag")
+	}
+}
+
+// TestIsQuotaExhaustedError 403/112 与流内额度语义算耗尽；排队/频控不算。
+func TestIsQuotaExhaustedError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"403 code112", NewUpstreamError(403, `{"code":"112","message":"{\"pricingUrl\":\"https://x/pricing\"}"}`), true},
+		{"403 pricingUrl", NewUpstreamError(403, `{"pricingUrl":"https://x/pricing"}`), true},
+		{"403 plain", NewUpstreamError(403, "access denied"), false},
+		{"429 rate", NewUpstreamError(429, "rate limit"), false},
+		{"in-stream quota", NewUpstreamError(0, `{"code":"quota_exceeded"}`), true},
+		{"queued", NewUpstreamError(0, `{"isQueued":true,"retryAfterSeconds":5}`), false},
+	}
+	for _, c := range cases {
+		if got := IsQuotaExhaustedError(c.err); got != c.want {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// TestPoolSkipsExhaustedAccount 耗尽账号不参与选号，也不因额度最高被选中。
+func TestPoolSkipsExhaustedAccount(t *testing.T) {
+	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
+	p.SetQuota("a", 9999, 0, false)
+	p.SetQuota("b", 10, 0, false)
+	p.MarkExhausted("a", "403 code 112")
+	if s, ok := p.Pick(nil); !ok || s.ID != "b" {
+		t.Fatalf("pick = %v, want b (a exhausted)", s)
+	}
+}
+
+// TestBestQuotaPrefersRecentlyUsed 换号排序：额度接近时优先最近用过的账号
+// （复用可能仍热的同号缓存）；额度差距大时仍选额度最高。
+// 直接测 bestQuotaIndex——Pick 的第一条规则是「保持当前账号」，会掩盖排序。
+func TestBestQuotaPrefersRecentlyUsed(t *testing.T) {
+	now := time.Now()
+
+	// 额度接近（900 vs 1000）：选刚用过的 b
+	p := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
+	p.SetQuota("a", 1000, 0, false)
+	p.SetQuota("b", 900, 0, false)
+	p.NoteSuccess("b")
+	slots := p.snapshot()
+	if idx := p.bestQuotaIndex(slots, nil, now, nil); idx < 0 || slots[idx].ID != "b" {
+		t.Fatalf("close quota should prefer recently used b, got idx=%d", idx)
+	}
+
+	// 额度差距大（100 vs 1000）：选额度最高的 a
+	p2 := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
+	p2.SetQuota("a", 1000, 0, false)
+	p2.SetQuota("b", 100, 0, false)
+	p2.NoteSuccess("b")
+	slots2 := p2.snapshot()
+	if idx := p2.bestQuotaIndex(slots2, nil, now, nil); idx < 0 || slots2[idx].ID != "a" {
+		t.Fatalf("large quota gap should pick a, got idx=%d", idx)
+	}
+
+	// 从未用过任何账号：退回额度最高
+	p3 := NewPool(testSlot(t, "a", "t"), testSlot(t, "b", "t"))
+	p3.SetQuota("a", 500, 0, false)
+	p3.SetQuota("b", 800, 0, false)
+	slots3 := p3.snapshot()
+	if idx := p3.bestQuotaIndex(slots3, nil, now, nil); idx < 0 || slots3[idx].ID != "b" {
+		t.Fatalf("no usage history should pick highest quota b, got idx=%d", idx)
 	}
 }

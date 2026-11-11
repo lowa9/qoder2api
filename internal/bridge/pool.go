@@ -3,7 +3,6 @@ package bridge
 import (
 	"encoding/json"
 	"errors"
-	"math/rand/v2"
 	"net/http"
 	"os"
 	"strconv"
@@ -68,6 +67,13 @@ type Slot struct {
 	orgRemaining   float64
 	orgAvailable   bool
 	quotaAt        time.Time
+	// exhausted 上游明确回过「额度/套餐用尽」（403 code 112 等）。
+	// 与冷却的区别：冷却是「等一会儿可能好」，额度耗尽要等重置或充值，
+	// 定时醒来只会再撞一次墙。所以它不参与冷却计时，只由额度刷新
+	// （额度回升）或手动解除清除。
+	exhausted bool
+	// lastUsedAt 最近一次成功调用时间，用于换号时优先复用缓存可能仍热的账号。
+	lastUsedAt time.Time
 }
 
 // SetQuota 更新账号剩余额度缓存（由 Service 定期刷新）。
@@ -112,6 +118,10 @@ func (s *Slot) rankQuota() (float64, time.Time) {
 func (s *Slot) hasQuota(now time.Time) bool {
 	s.quotaMu.Lock()
 	defer s.quotaMu.Unlock()
+	// 上游明确回过额度耗尽：不靠计时恢复，只由额度回升/手动解除清除。
+	if s.exhausted {
+		return false
+	}
 	if s.quotaAt.IsZero() || now.Sub(s.quotaAt) > quotaFreshFor {
 		return true
 	}
@@ -158,13 +168,51 @@ func (s *Slot) noteSuccess() {
 	s.mu.Lock()
 	s.lastErr = ""
 	s.mu.Unlock()
+	// 成功即证明还有额度，清掉可能过期的耗尽标记。
+	s.quotaMu.Lock()
+	s.exhausted = false
+	s.quotaMu.Unlock()
 }
 
-// uncool 立即解除冷却（额度重置/充值后由刷新器或手动操作调用）。
+// uncool 立即解除冷却与额度耗尽标记（额度重置/充值后由刷新器或手动操作调用）。
 func (s *Slot) uncool() {
 	s.mu.Lock()
 	s.cooldownUntil = time.Time{}
 	s.mu.Unlock()
+	s.quotaMu.Lock()
+	s.exhausted = false
+	s.quotaMu.Unlock()
+}
+
+// markExhausted 标记该账号额度/套餐已用尽（不做定时冷却）。
+func (s *Slot) markExhausted(reason string) {
+	s.quotaMu.Lock()
+	s.exhausted = true
+	s.quotaMu.Unlock()
+	s.mu.Lock()
+	s.lastErr = reason
+	s.mu.Unlock()
+}
+
+// isExhausted 返回额度耗尽标记。
+func (s *Slot) isExhausted() bool {
+	s.quotaMu.Lock()
+	defer s.quotaMu.Unlock()
+	return s.exhausted
+}
+
+// noteUsed 记录成功调用时间（换号时用于优先选缓存可能仍热的账号）。
+func (s *Slot) noteUsed(at time.Time) {
+	s.mu.Lock()
+	s.lastUsedAt = at
+	s.mu.Unlock()
+}
+
+// usedAt 返回最近一次成功调用时间。
+func (s *Slot) usedAt() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastUsedAt
 }
 
 // Pool 是账号池：轮询选号，跳过冷却中与已试过的账号。
@@ -355,7 +403,7 @@ func (p *Pool) Pick(exclude map[string]struct{}, filters ...func(*Slot) bool) (*
 		if _, skip := exclude[sl.ID]; skip {
 			continue
 		}
-		if !sl.available(now) {
+		if !sl.available(now) || sl.isExhausted() {
 			continue
 		}
 		if filter != nil && !filter(sl) {
@@ -376,6 +424,19 @@ func (p *Pool) Cool(id string, d time.Duration, reason string) {
 		if s.ID == id {
 			s.cool(d, reason)
 			logger.Info("pool: account %s cooled for %s (%s)", id, d, reason)
+			p.save()
+			return
+		}
+	}
+}
+
+// MarkExhausted 标记账号额度/套餐用尽：不参与选号，也不做定时冷却。
+// 由额度刷新（额度回升）或手动「解除全部冷却」清除。
+func (p *Pool) MarkExhausted(id, reason string) {
+	for _, s := range p.snapshot() {
+		if s.ID == id {
+			s.markExhausted(reason)
+			logger.Info("pool: account %s marked quota-exhausted (no timed cooldown)", id)
 			p.save()
 			return
 		}
@@ -430,13 +491,27 @@ func (p *Pool) SetQuota(id string, remaining, orgRemaining float64, orgAvailable
 // quotaFreshFor 额度缓存在该时长内才参与排序。
 const quotaFreshFor = 30 * time.Minute
 
-// bestQuotaIndex 返回剩余额度最高且可用的 slot 下标；无可用额度数据返回 -1。
+// recentUseWindow 换号时「最近用过」的有效期。DeepSeek 的同号前缀缓存
+// 实测可达 48h，窗口内复用该账号更可能命中缓存。
+const recentUseWindow = 48 * time.Hour
+
+// recentUseQuotaSlack 额度接近的判定：候选额度不低于最高额度的该比例时，
+// 视为「额度差不多」，此时优先选最近用过的账号（保缓存）而不是绝对最高。
+const recentUseQuotaSlack = 0.8
+
+// bestQuotaIndex 选出换号目标：先按额度筛出「额度接近最高」的候选，
+// 再在其中优先选最近用过的账号（缓存可能仍热）；都很旧则取额度最高。
+// 无可用额度数据返回 -1。
 func (p *Pool) bestQuotaIndex(slots []*Slot, exclude map[string]struct{}, now time.Time, filter func(*Slot) bool) int {
-	best := -1
+	type cand struct {
+		idx  int
+		rem  float64
+		used time.Time
+	}
+	var cands []cand
 	bestRem := 0.0
-	var ties []int
 	for i, s := range slots {
-		if _, skip := exclude[s.ID]; skip || !s.available(now) {
+		if _, skip := exclude[s.ID]; skip || !s.available(now) || s.isExhausted() {
 			continue
 		}
 		if filter != nil && !filter(s) {
@@ -446,20 +521,39 @@ func (p *Pool) bestQuotaIndex(slots []*Slot, exclude map[string]struct{}, now ti
 		if at.IsZero() || now.Sub(at) > quotaFreshFor {
 			continue
 		}
-		switch {
-		case best < 0 || rem > bestRem:
-			best, bestRem, ties = i, rem, []int{i}
-		case rem == bestRem:
-			ties = append(ties, i)
+		cands = append(cands, cand{idx: i, rem: rem, used: s.usedAt()})
+		if rem > bestRem {
+			bestRem = rem
 		}
 	}
-	if best < 0 {
+	if len(cands) == 0 {
 		return -1
 	}
-	if len(ties) > 1 {
-		return ties[rand.IntN(len(ties))]
+	// 额度接近最高的候选中，优先最近用过的（缓存可能仍热）。
+	threshold := bestRem * recentUseQuotaSlack
+	var warm []cand
+	for _, c := range cands {
+		if c.rem >= threshold && !c.used.IsZero() && now.Sub(c.used) < recentUseWindow {
+			warm = append(warm, c)
+		}
 	}
-	return best
+	pickFrom := cands
+	if len(warm) > 0 {
+		pickFrom = warm
+	}
+	best := pickFrom[0]
+	for _, c := range pickFrom[1:] {
+		if len(warm) > 0 {
+			if c.used.After(best.used) {
+				best = c
+			}
+			continue
+		}
+		if c.rem > best.rem {
+			best = c
+		}
+	}
+	return best.idx
 }
 
 // setCurrentAuto 把当前路由账号设为 id（自动来源）。
@@ -560,6 +654,7 @@ func (p *Pool) NoteSuccess(id string) {
 	for _, s := range p.snapshot() {
 		if s.ID == id {
 			s.noteSuccess()
+			s.noteUsed(time.Now())
 			p.mu.Lock()
 			p.lastSuccess = id
 			if p.pinned == "" {
@@ -621,6 +716,34 @@ func isLoginExpired(err error) bool {
 	}
 	d := strings.ToLower(ue.Detail)
 	return strings.Contains(d, `"code":"105"`) || strings.Contains(d, "login expired")
+}
+
+// IsQuotaExhaustedError 判断错误是否表示「该账号额度/套餐已用尽」。
+//
+// 典型是上游 403 + code 112（返回 pricingUrl 要求升级套餐）。这类错误不会
+// 靠等待恢复——要等额度重置或充值，所以应标记账号无额度而不是定时冷却：
+// 定时醒来只会再撞一次墙，一次 failover 还会把整池账号全冷却。
+func IsQuotaExhaustedError(err error) bool {
+	var ue *UpstreamError
+	if !errors.As(err, &ue) {
+		return false
+	}
+	d := ue.Detail
+	// 403 且带套餐/额度语义（code 112 / pricingUrl / quota 等）。
+	if ue.Status == http.StatusForbidden {
+		if strings.Contains(d, `"112"`) || strings.Contains(strings.ToLower(d), "pricingurl") {
+			return true
+		}
+	}
+	// 流内业务错误（Status=0）里的额度耗尽语义；排队/频控不算。
+	if ue.Status == 0 && !isUpstreamQueue(err) {
+		low := strings.ToLower(d)
+		if strings.Contains(low, "quota") || strings.Contains(low, "credit") ||
+			strings.Contains(low, "exceed") || strings.Contains(low, "pricingurl") {
+			return true
+		}
+	}
+	return false
 }
 
 // isAccountExhaustedDetail 识别流内业务错误里「该账号已耗尽」的语义。
@@ -697,6 +820,7 @@ type SlotStatus struct {
 	PinnedManual       bool   `json:"pinned_manual,omitempty"`
 	LastUsed           bool   `json:"last_used,omitempty"`
 	LastError          string `json:"last_error,omitempty"`
+	QuotaExhausted     bool   `json:"quota_exhausted,omitempty"`
 }
 
 // Status 返回该账号的运行时状态。
@@ -707,7 +831,8 @@ func (s *Slot) Status() SlotStatus {
 	if now := time.Now(); now.Before(s.cooldownUntil) {
 		rem = s.cooldownUntil.Sub(now).Milliseconds()
 	}
-	return SlotStatus{ID: s.ID, Name: s.Name, Region: string(s.Region), CoolingRemainingMS: rem, LastError: s.lastErr}
+	return SlotStatus{ID: s.ID, Name: s.Name, Region: string(s.Region), CoolingRemainingMS: rem,
+		LastError: s.lastErr, QuotaExhausted: s.isExhausted()}
 }
 
 // Status 返回池内所有账号的运行时状态。

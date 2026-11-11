@@ -606,19 +606,24 @@ func stripSystemReminders(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// Claude Code 会在 system 开头注入一条客户端计费/归因头：
+// 客户端会在 system 开头注入传输层元数据行，形如：
 //
 //	x-anthropic-billing-header: cc_version=...; cc_entrypoint=cli; cch=xxxxx;
 //
-// 其中 cch 会随会话/请求变化，整条头也不属于稳定 system 内容。
-// 从路由键、会话键和预览里去掉，避免同一 agent 被拆成多个前缀组。
+// 这些行不是模型指令，且带每次请求都变的字段（cch 等）。Qwen/Kimi 的上游
+// 前缀缓存严格按前缀匹配，留着它们会让每轮都冷启动（实测 100% → 0%）。
+//
+// 这里用通用规则而不是逐个字段硬编码：任何 `x-<name>: k=v; k=v;` 形态的
+// 元数据行都剥离，这样换客户端（Claude Code / omp / 其它）或上游新增字段
+// 都不需要再改代码。只匹配「以 x- 开头且含 key=value 分号对」的行，避免
+// 误伤正文里以 x- 开头的普通句子。
 var (
-	billingHeaderPattern = regexp.MustCompile(`(?im)^\s*x-anthropic-billing-(?:header|hdr):[^\n]*\n?`)
-	cchTokenPattern      = regexp.MustCompile(`(?i)\bcch=[^;\s]*;?\s*`)
+	clientMetaLinePattern = regexp.MustCompile(`(?im)^[ \t]*x-[a-z0-9][a-z0-9-]*:[^\n]*=[^\n]*\n?`)
+	cchTokenPattern       = regexp.MustCompile(`(?i)\bcch=[^;\s]*;?\s*`)
 )
 
 func stripClientMarkers(s string) string {
-	s = billingHeaderPattern.ReplaceAllString(s, "")
+	s = clientMetaLinePattern.ReplaceAllString(s, "")
 	s = cchTokenPattern.ReplaceAllString(s, "")
 	return strings.TrimSpace(s)
 }
@@ -881,7 +886,7 @@ func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages [
 
 	// 上游前缀缓存对一个每次都变的计费头非常敏感（Qwen/Kimi 实测命中率
 	// 会从 100% 掉到 0%），发送前从 system 中移除；路由键同样忽略它。
-	body["messages"] = stripBillingHeaderFromMessages(messages)
+	body["messages"] = stripClientMetaFromMessages(messages)
 	if tools != nil {
 		body["tools"] = tools
 	}
@@ -968,7 +973,12 @@ func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages [
 		if emitted || !ShouldFailover(err) {
 			return err
 		}
-		b.coolSlot(slot.ID, CooldownFor(err), err.Error())
+		// 额度/套餐用尽：标记无额度而不是冷却——定时醒来只会再撞一次墙。
+		if IsQuotaExhaustedError(err) {
+			b.markSlotExhausted(slot.ID, err.Error())
+		} else {
+			b.coolSlot(slot.ID, CooldownFor(err), err.Error())
+		}
 		tried[slot.ID] = struct{}{}
 		logger.Info("callQoder: account=%s id=%s region=%s failed, failing over to next account: %v",
 			slot.Name, slot.ID, slot.Region, err)
