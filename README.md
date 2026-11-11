@@ -318,6 +318,18 @@ access token 并回传新的 refresh_token）在过期前**主动续期**。
   同一个 Claude Code 会话拆成两个键（表现为中途换会话、缓存整段失效）。
   首条消息只含提醒时会继续使用后面真正的用户消息派生会话键。
 
+### 🛡️ 设置原子写 + 排队总预算（2026-11-11）
+
+**2026-11-11 CST** · 本地特性（`local/org-resource-package` 分支）
+
+从上游 2026-11 安全审计中挑出的两条与风控架构解耦的通用修补：
+
+- `SaveSettings` 改为同目录临时文件 + `rename`（0600），并发 `LoadSettings`
+  不会读到写了一半的 JSON；保存失败会清理临时文件。
+- 排队等待新增总预算 `QueueWaitBudget`，默认 **30 分钟**，可用
+  `QODER2API_QUEUE_WAIT_BUDGET_SEC` 覆盖（上限 6 小时）。即使开启
+  `queue_wait_first_token`（首字前一直等），也不会超过总预算。
+
 ### 🆕 新增账号与「设为当前」（2026-11-11）
 
 **2026-11-11 CST** · 本地特性（`local/org-resource-package` 分支）

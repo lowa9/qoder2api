@@ -1054,14 +1054,26 @@ func (b *Bridge) streamWithSlot(ctx context.Context, slot *Slot, qurl string, bo
 		}
 		// 队列拥塞且尚未发出内容：同账号等待重试（不换号——同模型同队列）
 		if !emitted && isUpstreamQueue(err) {
-			// 封顶判定：开关 ON=首字前一直等（仅 ctx 取消停止）；OFF=按 QueueMaxRetries
+			// 总预算兜底：即使「首字前一直等」也不能无限挂起。
+			if totalWait >= QueueWaitBudget {
+				logger.Info("upstream queued, total wait reached budget %s after %d tries: %v",
+					QueueWaitBudget, queueTries, err)
+				return finish(WaitOutcomeGaveUp, emitted, err)
+			}
+			// 封顶判定：开关 ON=首字前一直等（仅预算/ctx 停止）；OFF=按 QueueMaxRetries
 			if !QueueWaitFirstToken && queueTries >= QueueMaxRetries {
 				logger.Info("upstream queued, gave up after %d tries (~%s): %v", queueTries, totalWait, err)
 				return finish(WaitOutcomeGaveUp, emitted, err)
 			}
 			wait := queueRetryAfter(err)
-			logger.Info("upstream queued (model congested), waiting %s before retry on same account (try %d, waited ~%s): %v",
-				wait, queueTries+1, totalWait, err)
+			if remain := QueueWaitBudget - totalWait; wait > remain {
+				wait = remain
+			}
+			if wait <= 0 {
+				return finish(WaitOutcomeGaveUp, emitted, err)
+			}
+			logger.Info("upstream queued (model congested), waiting %s before retry on same account (try %d, waited ~%s, budget %s): %v",
+				wait, queueTries+1, totalWait, QueueWaitBudget, err)
 			if serr := sleepCtx(ctx, wait); serr != nil {
 				// ctx 取消/超时：上抛最后一次错误
 				return finish(WaitOutcomeCancelled, emitted, err)

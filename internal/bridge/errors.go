@@ -15,6 +15,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,14 +51,19 @@ var (
 	// QueueWaitFirstToken 排队时「首字前一直等」：true=直到出首字或客户端断开才停
 	// （忽略 QueueMaxRetries）；false=按 QueueMaxRetries 封顶。默认开（true）。
 	QueueWaitFirstToken = true
+	// QueueWaitBudget 一次请求排队等待的总预算，防止「首字前一直等」无限挂起。
+	// 可用 QODER2API_QUEUE_WAIT_BUDGET_SEC 覆盖。
+	QueueWaitBudget = DefaultQueueWaitBudget
 )
 
 const (
-	DefaultQueueMaxRetries = 2  // 排队同账号最多重试次数
-	DefaultQueueWaitCapSec = 30 // 单次排队等待上限（秒）
-	DefaultQueueWaitDefSec = 15 // 上游未给 retryAfter 时的默认等待（秒）
-	maxQueueRetriesCeiling = 10 // 重试次数硬上限（防误配过长）
+	DefaultQueueMaxRetries = 2                // 排队同账号最多重试次数
+	DefaultQueueWaitCapSec = 30               // 单次排队等待上限（秒）
+	DefaultQueueWaitDefSec = 15               // 上游未给 retryAfter 时的默认等待（秒）
+	DefaultQueueWaitBudget = 30 * time.Minute // 排队总预算默认值
+	maxQueueRetriesCeiling = 10               // 重试次数硬上限（防误配过长）
 	maxQueueWaitCeilingSec = 300
+	maxQueueWaitBudget     = 6 * time.Hour // 总预算硬上限
 )
 
 // ApplyQueueSettings 应用控制台配置的排队重试参数到包级变量（带默认值与夹取）。
@@ -75,8 +82,18 @@ func ApplyQueueSettings(maxRetries, waitCapSec, waitDefaultSec int, waitFirstTok
 	QueueWaitCap = clampQueueSeconds(waitCapSec, DefaultQueueWaitCapSec)
 	QueueWaitDefault = clampQueueSeconds(waitDefaultSec, DefaultQueueWaitDefSec)
 	QueueWaitFirstToken = waitFirstToken
-	logger.Info("queue retry applied: maxRetries=%d waitCap=%s waitDefault=%s waitFirstToken=%v",
-		QueueMaxRetries, QueueWaitCap, QueueWaitDefault, QueueWaitFirstToken)
+	QueueWaitBudget = DefaultQueueWaitBudget
+	if v := strings.TrimSpace(os.Getenv("QODER2API_QUEUE_WAIT_BUDGET_SEC")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			d := time.Duration(n) * time.Second
+			if d > maxQueueWaitBudget {
+				d = maxQueueWaitBudget
+			}
+			QueueWaitBudget = d
+		}
+	}
+	logger.Info("queue retry applied: maxRetries=%d waitCap=%s waitDefault=%s waitFirstToken=%v waitBudget=%s",
+		QueueMaxRetries, QueueWaitCap, QueueWaitDefault, QueueWaitFirstToken, QueueWaitBudget)
 }
 
 func clampQueueSeconds(v, def int) time.Duration {

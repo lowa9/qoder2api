@@ -369,17 +369,32 @@ func TestQueueRetryAfter(t *testing.T) {
 }
 
 func TestApplyQueueSettings(t *testing.T) {
-	omr, owc, owd, oft := QueueMaxRetries, QueueWaitCap, QueueWaitDefault, QueueWaitFirstToken
-	defer func() { QueueMaxRetries, QueueWaitCap, QueueWaitDefault, QueueWaitFirstToken = omr, owc, owd, oft }()
+	omr, owc, owd, oft, ob := QueueMaxRetries, QueueWaitCap, QueueWaitDefault, QueueWaitFirstToken, QueueWaitBudget
+	defer func() {
+		QueueMaxRetries, QueueWaitCap, QueueWaitDefault, QueueWaitFirstToken, QueueWaitBudget = omr, owc, owd, oft, ob
+	}()
 
 	// 全 0 → 各自默认
 	ApplyQueueSettings(0, 0, 0, false)
 	if QueueMaxRetries != DefaultQueueMaxRetries ||
 		QueueWaitCap != DefaultQueueWaitCapSec*time.Second ||
 		QueueWaitDefault != DefaultQueueWaitDefSec*time.Second ||
-		QueueWaitFirstToken != false {
-		t.Errorf("defaults not applied: %d %v %v %v", QueueMaxRetries, QueueWaitCap, QueueWaitDefault, QueueWaitFirstToken)
+		QueueWaitFirstToken != false ||
+		QueueWaitBudget != DefaultQueueWaitBudget {
+		t.Errorf("defaults not applied: %d %v %v %v %v", QueueMaxRetries, QueueWaitCap, QueueWaitDefault, QueueWaitFirstToken, QueueWaitBudget)
 	}
+	// 排队总预算可用环境变量覆盖，并有硬上限
+	t.Setenv("QODER2API_QUEUE_WAIT_BUDGET_SEC", "60")
+	ApplyQueueSettings(0, 0, 0, false)
+	if QueueWaitBudget != time.Minute {
+		t.Errorf("budget env = %v, want 1m", QueueWaitBudget)
+	}
+	t.Setenv("QODER2API_QUEUE_WAIT_BUDGET_SEC", "999999")
+	ApplyQueueSettings(0, 0, 0, false)
+	if QueueWaitBudget != maxQueueWaitBudget {
+		t.Errorf("budget cap = %v, want %v", QueueWaitBudget, maxQueueWaitBudget)
+	}
+	t.Setenv("QODER2API_QUEUE_WAIT_BUDGET_SEC", "")
 	// 正常值透传（含开关）
 	ApplyQueueSettings(5, 10, 8, true)
 	if QueueMaxRetries != 5 || QueueWaitCap != 10*time.Second || QueueWaitDefault != 8*time.Second || QueueWaitFirstToken != true {

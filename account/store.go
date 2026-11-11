@@ -231,14 +231,37 @@ func LoadSettings() (*Settings, error) {
 
 func SaveSettings(s *Settings) error {
 	path := settingsPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0600)
+	// 临时文件 + rename：并发读不会看到写了一半的 JSON。
+	f, err := os.CreateTemp(dir, ".settings-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp) // rename 成功后是 no-op
+	if err := f.Chmod(0600); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // EnsureMachineSalt 读取（或首次生成并落盘）本机设备指纹盐（settings.json machine_salt）。
