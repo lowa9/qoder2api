@@ -318,6 +318,31 @@ access token 并回传新的 refresh_token）在过期前**主动续期**。
   同一个 Claude Code 会话拆成两个键（表现为中途换会话、缓存整段失效）。
   首条消息只含提醒时会继续使用后面真正的用户消息派生会话键。
 
+### 💸 Qwen4 缓存全灭的根因：计费头未从上游 system 剥离（2026-11-12）
+
+**2026-11-12 CST** · 本地特性（`local/org-resource-package` 分支）
+
+`qmodel_latest`（Qwen4-Max-Preview）两天 189 次请求 2648 credits，其中
+**`/v1/messages` 路径 67 次、3823 万 prompt tokens、缓存命中 0.1%、2550 credits**；
+同样模型走 `/v1/chat/completions` 命中 91.7%。
+
+受控实验（同一 ~20k 前缀，只改 `cch`）：
+
+| 模型 | cch 变化 | 缓存命中 |
+|---|---|---|
+| qmodel_latest | 11111 → 22222 | **0%** |
+| qmodel_latest | 22222 → 22222 | **100%** |
+| dfmodel | 11111 → 22222 | 98.8%（不受影响） |
+
+根因：Claude Code 把 `x-anthropic-billing-header: ... cch=<每次变化>;` 注入
+system 开头；Qwen/Kimi 上游的前缀缓存严格按前缀匹配，所以每轮都冷启动
+（每次 60 万 token ≈ 42 credits）。DeepSeek 的缓存实现容忍这种变化。
+
+修复：发送上游前从 system 消息中删除该计费头（Qoder 不校验它，它只对
+Anthropic 官方计费有意义）。路由键/预览此前已忽略，这次补上真正发给上游的
+prompt。修复后实测：qmodel_latest 与 kmodel_latest 在 cch 连续变化时
+缓存命中 99.9–100%。
+
 ### 🛡️ 设置原子写 + 排队总预算（2026-11-11）
 
 **2026-11-11 CST** · 本地特性（`local/org-resource-package` 分支）

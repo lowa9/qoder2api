@@ -613,7 +613,7 @@ func stripSystemReminders(s string) string {
 // 其中 cch 会随会话/请求变化，整条头也不属于稳定 system 内容。
 // 从路由键、会话键和预览里去掉，避免同一 agent 被拆成多个前缀组。
 var (
-	billingHeaderPattern = regexp.MustCompile(`(?im)^\s*x-anthropic-billing-hdr:[^\n]*\n?`)
+	billingHeaderPattern = regexp.MustCompile(`(?im)^\s*x-anthropic-billing-(?:header|hdr):[^\n]*\n?`)
 	cchTokenPattern      = regexp.MustCompile(`(?i)\bcch=[^;\s]*;?\s*`)
 )
 
@@ -931,7 +931,9 @@ func (b *Bridge) CallQoderWithOpts(ctx context.Context, agent string, messages [
 		}
 	}
 
-	body["messages"] = messages
+	// 上游前缀缓存对一个每次都变的计费头非常敏感（Qwen/Kimi 实测命中率
+	// 会从 100% 掉到 0%），发送前从 system 中移除；路由键同样忽略它。
+	body["messages"] = stripBillingHeaderFromMessages(messages)
 	if tools != nil {
 		body["tools"] = tools
 	}

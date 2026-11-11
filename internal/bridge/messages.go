@@ -454,3 +454,57 @@ func relocateTaskNotifications(messages []interface{}) []interface{} {
 	}
 	return out
 }
+
+// stripBillingHeaderFromMessages 删除 system 消息里的客户端计费/归因头。
+//
+// Claude Code 会把
+//
+//	x-anthropic-billing-header: cc_version=...; cc_entrypoint=cli; cch=xxxxx;
+//
+// 注入到 system 开头，其中 cch 每次请求都变。Qwen/Kimi 的上游前缀缓存
+// 严格按前缀匹配：实测同一个 ~20k 前缀仅 cch 变化就让命中率从 100% 掉到 0%
+// （DeepSeek 不受影响）。该头只对 Anthropic 官方计费有意义，Qoder 不校验。
+func stripBillingHeaderFromMessages(messages []interface{}) []interface{} {
+	out := make([]interface{}, 0, len(messages))
+	changed := false
+	for _, it := range messages {
+		m, ok := it.(map[string]interface{})
+		if !ok {
+			out = append(out, it)
+			continue
+		}
+		if role, _ := m["role"].(string); role != "system" {
+			out = append(out, it)
+			continue
+		}
+		content, ok := m["content"].(string)
+		if !ok {
+			out = append(out, it)
+			continue
+		}
+		stripped := content
+		if billingHeaderPattern.MatchString(stripped) {
+			stripped = billingHeaderPattern.ReplaceAllString(stripped, "")
+		}
+		if !cchTokenPattern.MatchString(stripped) && stripped == content {
+			out = append(out, it)
+			continue
+		}
+		stripped = cchTokenPattern.ReplaceAllString(stripped, "")
+		stripped = strings.TrimSpace(stripped)
+		changed = true
+		if stripped == "" {
+			continue
+		}
+		nm := make(map[string]interface{}, len(m))
+		for k, v := range m {
+			nm[k] = v
+		}
+		nm["content"] = stripped
+		out = append(out, nm)
+	}
+	if !changed {
+		return messages
+	}
+	return out
+}

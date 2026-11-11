@@ -82,3 +82,49 @@ func TestRelocateTaskNotificationsWithoutSystem(t *testing.T) {
 		t.Fatalf("len = %d, want 1", len(out))
 	}
 }
+
+// TestStripBillingHeaderFromMessages 客户端计费头不应进入上游 system，
+// 否则 Qwen/Kimi 的前缀缓存每次都会失效。
+func TestStripBillingHeaderFromMessages(t *testing.T) {
+	hdr := "x-anthropic-billing-header: cc_version=2.1.280.096; cc_entrypoint=cli; cch=64dfe;"
+	msgs := []interface{}{
+		map[string]interface{}{"role": "system", "content": hdr + "\nYou are Claude Code."},
+		map[string]interface{}{"role": "user", "content": "hi"},
+	}
+	out := stripBillingHeaderFromMessages(msgs)
+	sys, _ := out[0].(map[string]interface{})["content"].(string)
+	if strings.Contains(sys, "cch=") || strings.Contains(sys, "billing-header") {
+		t.Errorf("billing header still present: %q", sys)
+	}
+	if sys != "You are Claude Code." {
+		t.Errorf("content = %q", sys)
+	}
+	// 原始切片不被修改（上游 body 之外仍用于日志/指纹）
+	orig, _ := msgs[0].(map[string]interface{})["content"].(string)
+	if !strings.Contains(orig, "cch=") {
+		t.Error("input messages must not be mutated")
+	}
+
+	// 只有计费头的 system 消息应整体丢弃。
+	only := []interface{}{
+		map[string]interface{}{"role": "system", "content": hdr},
+		map[string]interface{}{"role": "user", "content": "hi"},
+	}
+	if out := stripBillingHeaderFromMessages(only); len(out) != 1 {
+		t.Errorf("header-only system message should be dropped, got %d messages", len(out))
+	}
+
+	// 中间出现的 cch token 也要去掉。
+	inline := []interface{}{
+		map[string]interface{}{"role": "system", "content": "You are Claude Code. cch=abc12; stable"},
+	}
+	if s, _ := stripBillingHeaderFromMessages(inline)[0].(map[string]interface{})["content"].(string); strings.Contains(s, "cch=") {
+		t.Errorf("inline cch not stripped: %q", s)
+	}
+
+	// 无计费头时返回原切片，不做无谓复制。
+	plain := []interface{}{map[string]interface{}{"role": "system", "content": "plain system"}}
+	if got := stripBillingHeaderFromMessages(plain); &got[0] != &plain[0] {
+		t.Error("plain messages should be returned as-is")
+	}
+}
