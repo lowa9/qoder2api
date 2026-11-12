@@ -105,7 +105,10 @@ pre {
   padding: 12px; border: 1px solid var(--line);
 }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-#callsBox, #creditBox { overflow-x: auto; }
+#creditBox { overflow-x: auto; }
+/* 请求记录表：限高滚动 + 表头吸顶，避免把下方原始日志推得太远 */
+#callsBox { max-height: 460px; overflow: auto; }
+#callsBox thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
 #callsBox table { table-layout: fixed; width: 100%; min-width: 1100px; }
 th { white-space: nowrap; }
 .cell-status, .cell-num, .cell-perf, .cell-src { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -115,6 +118,31 @@ th { white-space: nowrap; }
 .kpi .v { font-size: 17px; font-weight: 650; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .kpi .k { color: var(--ink-3); font-size: 11.5px; margin-top: 2px; }
 @media (max-width: 860px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* ── 积分 Token 时序图 ─────────────────────────────────────────────── */
+.credit-chart {
+  margin-top: 12px; border: 1px solid var(--line-soft); border-radius: 10px;
+  background: var(--surface-2); padding: 10px 12px 4px;
+}
+.credit-chart-hd {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  font-size: 12px; color: var(--ink-3); margin-bottom: 6px;
+}
+.credit-chart-hd .lg { display: inline-flex; align-items: center; gap: 5px; }
+.credit-chart-hd .sw { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.credit-chart-hd .sw-in { background: var(--accent); }
+.credit-chart-hd .sw-out { background: var(--accent); opacity: .5; }
+.credit-chart svg { display: block; width: 100%; height: auto; }
+.credit-chart .empty { padding: 26px 0; text-align: center; color: var(--ink-3); font-size: 12.5px; }
+.credit-chart .grid { stroke: var(--line-soft); stroke-width: 1; }
+.credit-chart .axis { stroke: var(--line); stroke-width: 1; }
+.credit-chart .tick { fill: var(--ink-3); font: 10px var(--mono); }
+.credit-chart .bar-in { fill: var(--accent); }
+.credit-chart .bar-out { fill: var(--accent); fill-opacity: .5; }
+.credit-chart .bar-in:hover, .credit-chart .bar-out:hover { fill-opacity: .8; }
+.credit-data { margin-top: 10px; }
+.credit-data summary { cursor: pointer; font-size: 12px; color: var(--ink-3); }
+.credit-data > div { margin-top: 8px; max-height: 300px; overflow: auto; }
 
 /* ── 额度与账号 ───────────────────────────────────────────────────── */
 .quota { font-size: 12px; line-height: 1.5; color: var(--ink-3); width: 100%; max-width: 320px; }
@@ -284,25 +312,48 @@ th { white-space: nowrap; }
         <div id="modelsBox">加载中...</div>
     </section>
 
-    <section class="card" data-view="logs" hidden>
-      <h3>最近日志</h3>
-      <pre id="logsBox">加载中...</pre>
-    </section>
-
     <section class="card" data-view="usage" hidden>
       <h3>积分扣除历史 <span class="muted" style="font-size:12px">（按上游 usage.credits 逐次入账，持久化于 credit_history.json）</span></h3>
       <div class="row" style="margin-bottom:10px; gap:6px">
         <button class="secondary" id="creditAcctBtn">按账号</button>
         <button class="secondary" id="creditModelBtn">按模型</button>
+        <span style="width:8px"></span>
+        <span class="muted" style="font-size:12px">时间</span>
+        <select id="creditRangeSel" style="width:auto" aria-label="统计时间范围">
+          <option value="today">今天</option>
+          <option value="24h" selected>近24小时</option>
+          <option value="3d">近三天</option>
+          <option value="7d">近七天</option>
+          <option value="all">全部历史</option>
+        </select>
+        <span class="muted" style="font-size:12px">分桶</span>
+        <select id="creditBucketSel" style="width:auto" aria-label="图表分桶粒度">
+          <option value="auto" selected>自动</option>
+          <option value="1h">1 小时</option>
+          <option value="6h">6 小时</option>
+          <option value="1d">1 天</option>
+        </select>
         <button class="secondary" id="creditClearBtn" title="清空后从当前时刻重新累积">清空</button>
         <span class="muted" id="creditHint" style="font-size:12px"></span>
       </div>
       <div class="kpis" id="creditStats"></div>
+      <div class="credit-chart">
+        <div class="credit-chart-hd">
+          <span class="lg"><i class="sw sw-in"></i>输入 Token</span>
+          <span class="lg"><i class="sw sw-out"></i>输出 Token</span>
+          <span class="muted" id="creditChartNote"></span>
+        </div>
+        <div id="creditChart"><div class="empty">加载中...</div></div>
+      </div>
+      <details class="credit-data">
+        <summary>表格数据</summary>
+        <div id="creditSeriesTable"></div>
+      </details>
       <div id="creditBox" style="font-size:12px; margin-top:12px">加载中...</div>
     </section>
 
-    <section class="card" data-view="usage" hidden>
-      <h3>模型调用日志 <span class="muted" style="font-size:12px">（每次上游调用的结构化记录，最新在前；持久化于 call_history.json，最多 2000 条）</span></h3>
+    <section class="card" data-view="logs" hidden>
+      <h3>请求记录 <span class="muted" style="font-size:12px">（每次上游调用的结构化记录，最新在前；持久化于 call_history.json，最多 2000 条）</span></h3>
       <div class="row" style="margin-bottom:10px; flex-wrap:wrap; gap:6px; align-items:center">
         <button class="secondary" id="callsAllBtn">全部</button>
         <button class="secondary" id="callsErrBtn">仅错误</button>
@@ -311,6 +362,11 @@ th { white-space: nowrap; }
         <span class="muted" id="callsHint" style="font-size:12px"></span>
       </div>
       <div id="callsBox" style="font-size:12px">加载中...</div>
+    </section>
+
+    <section class="card" data-view="logs" hidden>
+      <h3>最近日志</h3>
+      <pre id="logsBox">加载中...</pre>
     </section>
 
 
@@ -956,6 +1012,8 @@ th { white-space: nowrap; }
 
     function renderCalls() {
       const box = $('callsBox');
+      // 20s 刷新会整块替换表格；保留滚动位置，避免正在翻旧记录时被弹回顶部。
+      const keepTop = box.scrollTop, keepLeft = box.scrollLeft;
       const rows = callsCache.filter(r => {
         if (callsFilter === 'error') return r.status !== 'ok';
         if (callsFilter === 'ok') return r.status === 'ok';
@@ -1044,6 +1102,8 @@ th { white-space: nowrap; }
         `<th>Token / 缓存</th><th style="text-align:right">Credits</th>` +
         `<th>性能</th><th>会话 / 来源</th><th>请求预览</th></tr></thead>` +
         `<tbody>${body}</tbody></table>`;
+      box.scrollTop = keepTop;
+      box.scrollLeft = keepLeft;
     }
 
     async function loadCalls() {
@@ -1059,6 +1119,8 @@ th { white-space: nowrap; }
     // ---- 积分扣除历史（按账号 / 按模型）---------------------------------
     let creditCache = null;
     let creditDim = 'account';
+    let creditRange = '24h';
+    let creditBucket = 'auto';
 
     // 模型 key -> 上游显示名（如 dfmodel -> DeepSeek-Flash）
     let modelNameByKey = {};
@@ -1069,6 +1131,182 @@ th { white-space: nowrap; }
         const k = m.id || m.key;
         if (k) modelNameByKey[k] = m.display_name || k;
       });
+    }
+
+    // 当前时间范围 → 查询窗口（from 为 null = 全部历史，服务端从最早记录开始）
+    function creditWindow() {
+      const now = new Date();
+      if (creditRange === 'all') return { from: null, to: now };
+      const from = new Date(now);
+      if (creditRange === 'today') {
+        from.setHours(0, 0, 0, 0);
+      } else {
+        const hours = creditRange === '24h' ? 24 : creditRange === '3d' ? 72 : 168;
+        from.setTime(now.getTime() - hours * 3600e3);
+      }
+      return { from, to: now };
+    }
+
+    // 自动分桶：今天/近24小时 → 1h，近三天 → 6h，近七天/全部 → 1d
+    function creditBucketSec() {
+      if (creditBucket === '1h') return 3600;
+      if (creditBucket === '6h') return 6 * 3600;
+      if (creditBucket === '1d') return 86400;
+      if (creditRange === 'today' || creditRange === '24h') return 3600;
+      if (creditRange === '3d') return 21600;
+      return 86400;
+    }
+
+    function creditRangeLabel() {
+      const m = { today: '今天', '24h': '近24小时', '3d': '近三天', '7d': '近七天', all: '全部历史' };
+      return m[creditRange] || creditRange;
+    }
+
+    // Token 轴/摘要用的紧凑格式（1.2K / 3.4M）。
+    function fmtTokShort(n) {
+      n = Number(n) || 0;
+      if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+      if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+      if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+      return String(Math.round(n));
+    }
+
+    // 桶起点的轴标签：日桶 MM-DD；6h 桶 MM-DD HH:00；1h 桶跨天时也带日期。
+    function creditBucketLabel(d, bucketSec, withDate) {
+      const p = n => String(n).padStart(2, '0');
+      const md = `${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+      if (bucketSec >= 86400) return md;
+      const hm = `${p(d.getHours())}:${p(d.getMinutes())}`;
+      if (bucketSec >= 21600 || withDate) return `${md} ${hm}`;
+      return d.getHours() === 0 ? md : hm;
+    }
+
+    function fmtBucketTime(d, bucketSec) {
+      const p = n => String(n).padStart(2, '0');
+      const md = `${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+      if (bucketSec >= 86400) return md;
+      return `${md} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    }
+
+    // 输入/输出 Token 堆叠柱状图。横轴是等宽时间桶，桶粒度由服务端回显，
+    // 切换范围或分桶后重新聚合，标签随实际桶宽变化。
+    function renderCreditChart() {
+      const host = $('creditChart');
+      const note = $('creditChartNote');
+      if (!host) return;
+      const d = creditCache || {};
+      const series = Array.isArray(d.series) ? d.series : [];
+      const pts = series.map(p => {
+        const t = new Date(p.t);
+        return {
+          t,
+          pt: Number(p.prompt_tokens || 0),
+          ct: Number(p.output_tokens || 0),
+          cached: Number(p.cached_tokens || 0),
+          credits: Number(p.credits || 0),
+          req: Number(p.requests || 0),
+        };
+      }).filter(p => !Number.isNaN(p.t.getTime()));
+      if (!pts.length) {
+        host.innerHTML = '<div class="empty">所选时间范围内暂无积分扣除记录</div>';
+        note.textContent = `${creditRangeLabel()} · 无数据`;
+        return;
+      }
+      const bucketSec = Number(d.bucket_seconds) || creditBucketSec();
+      const totals = pts.reduce((s, p) => s + p.pt + p.ct, 0);
+      const max = Math.max(1, ...pts.map(p => p.pt + p.ct));
+      // 1 小时桶跨天时，轴标签需要带日期才能分清是哪天。
+      const multiDay = new Set(pts.map(p => `${p.t.getFullYear()}-${p.t.getMonth()}-${p.t.getDate()}`)).size > 1;
+      note.textContent = `${creditRangeLabel()} · ${pts.length} 个分桶 · 合计 ${fmtTokShort(totals)} Token · 峰值 ${fmtTokShort(max)}`;
+
+      const W = 1200, H = 210, PL = 56, PR = 12, PT = 16, PB = 30;
+      const iw = W - PL - PR, ih = H - PT - PB;
+      const yBase = PT + ih;
+      const slot = iw / pts.length;
+      // 桶很多时按槽宽收缩；0.5 上限防止子像素宽度下相邻柱互相覆盖。
+      const bw = Math.max(0.5, Math.min(20, slot * 0.68));
+      const xOf = i => PL + slot * (i + 0.5);
+
+      let out = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="输入与输出 Token 用量" preserveAspectRatio="xMidYMid meet">`;
+      // y 轴网格 + 刻度（接近零的刻度显示 0，而不是 0.0K）
+      for (let i = 0; i <= 4; i++) {
+        const y = yBase - ih * i / 4;
+        out += `<line class="grid" x1="${PL}" y1="${y.toFixed(1)}" x2="${W - PR}" y2="${y.toFixed(1)}"/>`;
+        out += `<text class="tick" x="${PL - 6}" y="${(y + 3.5).toFixed(1)}" text-anchor="end">${fmtTokShort(max * i / 4)}</text>`;
+      }
+
+      pts.forEach((p, i) => {
+        const total = p.pt + p.ct;
+        if (!total) return; // 空桶保留在轴上，但不画柱
+        const hTot = ih * (total / max);
+        const hIn = ih * (p.pt / max);
+        const hOut = ih * (p.ct / max);
+        const x = xOf(i) - bw / 2;
+        // 堆叠两段之间留 2 个 viewBox 单位空隙（等同 surface gap）
+        const gap = (hIn > 1 && hOut > 3) ? 2 : 0;
+        const tip = `${creditBucketLabel(p.t, bucketSec, true)}  ` +
+          `${fmtNum(p.pt)} 输入（缓存 ${fmtNum(p.cached)}） / ${fmtNum(p.ct)} 输出 / ` +
+          `${p.req} 次 / ${p.credits.toFixed(4)} credits`;
+        out += `<g><title>${esc(tip)}</title>`;
+        if (hIn > 0) {
+          out += `<rect class="bar-in" x="${x.toFixed(2)}" y="${(yBase - hIn).toFixed(2)}" ` +
+            `width="${bw.toFixed(2)}" height="${hIn.toFixed(2)}"${p.ct > 0 ? '' : ' rx="3"'}/>`;
+        }
+        if (hOut > 0) {
+          const oh = Math.max(0.5, hOut - gap);
+          out += `<rect class="bar-out" x="${x.toFixed(2)}" y="${(yBase - hTot).toFixed(2)}" ` +
+            `width="${bw.toFixed(2)}" height="${oh.toFixed(2)}" rx="3"/>`;
+        }
+        out += '</g>';
+      });
+
+      out += `<line class="axis" x1="${PL}" y1="${yBase}" x2="${W - PR}" y2="${yBase}"/>`;
+
+      // x 轴：最多 8 个刻度；首尾靠边对齐，避免裁切。
+      const step = Math.max(1, Math.ceil(pts.length / 8));
+      let lastLabeled = -1;
+      for (let i = 0; i < pts.length; i += step) {
+        const x = xOf(i);
+        const anchor = x < PL + 20 ? 'start' : (x > W - PR - 20 ? 'end' : 'middle');
+        out += `<text class="tick" x="${Math.min(W - PR, Math.max(PL, x)).toFixed(1)}" ` +
+          `y="${yBase + 16}" text-anchor="${anchor}">${esc(creditBucketLabel(pts[i].t, bucketSec, multiDay))}</text>`;
+        lastLabeled = i;
+      }
+      const lastI = pts.length - 1;
+      if (lastI - lastLabeled >= Math.max(1, Math.round(step / 2))) {
+        out += `<text class="tick" x="${(W - PR).toFixed(1)}" y="${yBase + 16}" text-anchor="end">` +
+          `${esc(creditBucketLabel(pts[lastI].t, bucketSec, multiDay))}</text>`;
+      }
+
+      out += '</svg>';
+      host.innerHTML = out;
+    }
+
+    // 表格数据：图表的无悬停替代视图（空桶不列出）。
+    function renderCreditSeriesTable() {
+      const box = $('creditSeriesTable');
+      if (!box) return;
+      const d = creditCache || {};
+      const series = Array.isArray(d.series) ? d.series : [];
+      const bucketSec = Number(d.bucket_seconds) || creditBucketSec();
+      const rows = series.filter(p => (p.requests || 0) > 0 || (p.prompt_tokens || 0) > 0 || (p.output_tokens || 0) > 0);
+      if (!rows.length) {
+        box.innerHTML = '<span class="muted">所选时间范围内暂无记录</span>';
+        return;
+      }
+      const body = rows.map(p => {
+        const t = new Date(p.t);
+        return `<tr><td style="white-space:nowrap">${esc(fmtBucketTime(t, bucketSec))}</td>` +
+          `<td style="text-align:right">${fmtNum(p.requests || 0)}</td>` +
+          `<td style="text-align:right">${fmtNum(p.prompt_tokens || 0)}</td>` +
+          `<td style="text-align:right">${fmtNum(p.cached_tokens || 0)}</td>` +
+          `<td style="text-align:right">${fmtNum(p.output_tokens || 0)}</td>` +
+          `<td style="text-align:right">${fmtCredit(p.credits || 0)}</td></tr>`;
+      }).join('');
+      box.innerHTML = '<table style="width:100%;border-collapse:collapse"><thead><tr>' +
+        '<th>时间</th><th style="text-align:right">请求</th><th style="text-align:right">输入 Token</th>' +
+        '<th style="text-align:right">缓存命中</th><th style="text-align:right">输出 Token</th>' +
+        `<th style="text-align:right">扣除积分</th></tr></thead><tbody>${body}</tbody></table>`;
     }
 
     function fmtCredit(n) { return (Number(n) || 0).toFixed(4); }
@@ -1092,10 +1330,16 @@ th { white-space: nowrap; }
         creditKpi(fmtNum(d.entries || 0), '入账记录');
       $('creditAcctBtn').className = 'secondary' + (creditDim === 'account' ? '' : '');
       $('creditModelBtn').className = 'secondary';
+      const allEntries = Number(d.all_entries || 0);
+      const winEntries = Number(d.entries || 0);
       $('creditHint').textContent =
         `${(d.by_account || []).length} 个账号 · ${(d.by_model || []).length} 个模型` +
+        ` · 窗口 ${fmtNum(winEntries)} 条` + (allEntries > winEntries ? ` / 共 ${fmtNum(allEntries)} 条` : '') +
         (d.since ? ` · 数据自 ${String(d.since).replace('T', ' ').slice(0, 16)}` : '') +
         (d.file_bytes ? ` · 文件 ${(d.file_bytes / 1024).toFixed(1)} KB` : '');
+
+      renderCreditChart();
+      renderCreditSeriesTable();
 
       const rows = creditDim === 'model' ? (d.by_model || []) : (d.by_account || []);
       if (!rows.length) {
@@ -1134,11 +1378,19 @@ th { white-space: nowrap; }
     }
 
     async function loadCredits() {
+      const win = creditWindow();
+      const q = new URLSearchParams();
+      if (win.from) q.set('from', win.from.toISOString());
+      q.set('to', win.to.toISOString());
+      q.set('bucket', String(creditBucketSec()));
       try {
-        creditCache = await api('/api/credits');
+        creditCache = await api('/api/credits?' + q.toString());
         renderCredits();
       } catch (e) {
         $('creditBox').innerHTML = `<span class="msg err">${esc(e.message)}</span>`;
+        $('creditChart').innerHTML = '<div class="empty">读取积分历史失败</div>';
+        $('creditChartNote').textContent = '—';
+        $('creditSeriesTable').innerHTML = '';
       }
     }
 
@@ -1289,6 +1541,16 @@ th { white-space: nowrap; }
     // 积分扣除维度切换
     $('creditAcctBtn').onclick = () => { creditDim = 'account'; renderCredits(); };
     $('creditModelBtn').onclick = () => { creditDim = 'model'; renderCredits(); };
+
+    // 时间范围 / 分桶切换：重新向服务端聚合，横轴与统计口径一起变化
+    $('creditRangeSel').onchange = () => {
+      creditRange = $('creditRangeSel').value;
+      loadCredits();
+    };
+    $('creditBucketSel').onchange = () => {
+      creditBucket = $('creditBucketSel').value;
+      loadCredits();
+    };
 
     // 清空历史（持久化文件同步重置，之后从此刻重新累积）
     $('callsClearBtn').onclick = async () => {
@@ -1610,10 +1872,10 @@ th { white-space: nowrap; }
     // ---- 视图切换（左侧导航）------------------------------------------
     const VIEWS = {
       accounts: ['账号池', '账号、额度与签到'],
-      usage: ['用量', '模型调用、缓存命中与排队等待'],
+      usage: ['用量', '积分、Token 用量与排队等待'],
       config: ['配置', '接入信息、密钥与排队策略'],
       models: ['模型档位', '模型清单、Context 档位与价格倍率'],
-      logs: ['运行日志', '服务原始日志（最近 100 条）'],
+      logs: ['运行日志', '请求记录与服务原始日志'],
     };
     function showView(name) {
       if (!VIEWS[name]) name = 'accounts';

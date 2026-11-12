@@ -728,8 +728,44 @@ func handleCalls(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCredits 返回积分扣除历史聚合（按账号 / 按模型）。
+//
+// 可选查询参数（控制台图表用）：
+//
+//	from   窗口起点，RFC3339；缺省 = 从最早记录开始（全部历史）
+//	to     窗口终点，RFC3339；缺省 = 现在
+//	bucket 分桶秒数；缺省/0 = 不返回时间序列
 func handleCredits(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, svc.CreditSummary())
+	q := r.URL.Query()
+	var from, to time.Time
+	var bucket time.Duration
+	if v := strings.TrimSpace(q.Get("from")); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid from %q: %w", v, err))
+			return
+		}
+		from = t
+	}
+	if v := strings.TrimSpace(q.Get("to")); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid to %q: %w", v, err))
+			return
+		}
+		to = t
+	}
+	if v := strings.TrimSpace(q.Get("bucket")); v != "" {
+		// 31 天上限：既与服务端 maxCreditBucket 一致，也避免 n*time.Second
+		// 溢出成负数/零后被静默忽略。
+		const maxBucketSeconds = 31 * 24 * 60 * 60
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 || n > maxBucketSeconds {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid bucket %q: want 0..%d seconds", v, maxBucketSeconds))
+			return
+		}
+		bucket = time.Duration(n) * time.Second
+	}
+	writeJSON(w, http.StatusOK, svc.CreditSummaryRange(from, to, bucket))
 }
 
 // handleClearCalls 清空模型调用日志。

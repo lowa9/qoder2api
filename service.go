@@ -685,6 +685,11 @@ func (s *Service) CreditSummary() bridge.CreditSummaryView {
 	return bridge.CreditSummary()
 }
 
+// CreditSummaryRange 返回指定时间窗口的积分聚合与时间序列。
+func (s *Service) CreditSummaryRange(from, to time.Time, bucket time.Duration) bridge.CreditSummaryView {
+	return bridge.CreditSummaryRange(bridge.CreditRange{From: from, To: to, Bucket: bucket})
+}
+
 // ClearCalls 清空模型调用日志（内存与磁盘）。
 func (s *Service) ClearCalls() { bridge.ClearCalls() }
 
